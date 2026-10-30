@@ -279,10 +279,13 @@ cd /home/paang/Documents/Learn_Py && venv/bin/python batch_download_http.py --co
 - Membaca ID akun Discord user yang menjalankan perintah (`interaction.user.id`).
 - Format respon singkat dan bersih: `DiscordID: <user_id>` (pesan privat *ephemeral*).
 
-### O. Inisialisasi Git & Perlindungan Secret (.gitignore)
+### O. Inisialisasi Git & Publikasi ke GitHub
 - File `.gitignore` dibuat untuk menyaring `.env`, `venv/`, `downloads/`, cache gambar, dan bytecode `__pycache__`.
-- Repository Git lokal telah diinisialisasi pada branch `main` dengan commit awal.
-- GitHub CLI (`gh`) versi 2.103.3 telah dipasang di `~/.local/bin/gh`.
+- Repository Git lokal telah diinisialisasi pada branch `main`.
+- Repository publik berhasil dibuat dan di-push ke GitHub:
+  - **Nama Repo:** `datasheet-scout`
+  - **URL:** https://github.com/FaangCDP/datasheet-scout
+  - **Deskripsi:** High-performance electronic component datasheet scraper & Discord bot with multi-source fallback.
 
 ---
 
