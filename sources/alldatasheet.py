@@ -198,6 +198,14 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
             print(f"[{NAME} ERROR] Terdeteksi PDF dummy error AllDatasheet (website unavailable banner)!")
             return None
 
+        # Validasi ukuran minimal dan penanda akhir %%EOF
+        if len(r_pdf.content) < 2048:
+            print(f"[{NAME} ERROR] Ukuran file PDF terlalu kecil ({len(r_pdf.content)} bytes).")
+            return None
+
+        if b"%%EOF" not in r_pdf.content[-1024:]:
+            print(f"[{NAME} WARNING] Penanda %%EOF tidak ditemukan di akhir berkas (berkas mungkin terpotong).")
+
         filename = sanitize_filename(part_no, manufacturer)
         file_path = os.path.join(download_folder, filename)
 

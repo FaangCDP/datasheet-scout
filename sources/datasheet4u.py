@@ -205,6 +205,22 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
                 if chunk:
                     f.write(chunk)
 
+        # Validasi kelengkapan berkas: minimal 2KB dan pengecekan trailer %%EOF
+        file_sz = os.path.getsize(file_path)
+        if file_sz < 2048:
+            print(f"[{NAME} ERROR] Ukuran berkas PDF terlalu kecil ({file_sz} bytes), diduga rusak.")
+            try:
+                os.remove(file_path)
+            except OSError:
+                pass
+            return None
+
+        with open(file_path, "rb") as f:
+            f.seek(max(0, file_sz - 1024))
+            tail = f.read()
+            if b"%%EOF" not in tail:
+                print(f"[{NAME} WARNING] Penanda %%EOF tidak ditemukan di akhir berkas (berkas mungkin terpotong).")
+
         return file_path
 
     except (requests.RequestException, IOError) as e:

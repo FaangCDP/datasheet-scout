@@ -10,9 +10,9 @@ A high-performance electronic component datasheet scraper, downloader, and modul
 
 ### 1. Multi-Source Scraping Engine
 - **Automated Fallback**: Primary search on `datasheet4u.com`. If no matches or low relevance scores are found, automatically failovers to `alldatasheet.com`.
-- **Cloudflare TLS Fingerprint Bypass**: Employs `curl_cffi` browser impersonation (`chrome124`) to bypass Cloudflare bot walls without manual intervention.
+- **Cloudflare TLS Fingerprint Mitigation**: Employs `curl_cffi` browser impersonation (`chrome124`) to handle automated Cloudflare TLS fingerprint checks on `alldatasheet.com`. *(Note: Mitigates passive bot detection headers; does not solve interactive Turnstile or CAPTCHA interstitials if triggered by aggressive rate limits).*
 - **Intelligent Relevance Ranking**: Strips package suffixes (e.g., `LM358D` → `LM358`) to query clean base part numbers, scoring search results to prioritize exact matches (e.g., distinguishing `Arduino Uno` from `Arduino Nano`).
-- **File Integrity & Safety**: Sanitizes filename path separators to prevent path traversal errors and verifies binary magic bytes (`%PDF-`) to reject fake HTML/challenge response payloads.
+- **File Integrity & Safety**: Sanitizes filename path separators to prevent directory traversal exploits. Validates binary magic bytes (`%PDF-`), minimum file sizes, dummy error banners (25.3 KB placeholder error PDFs), and trailer markers (`%%EOF`) to reject corrupted or truncated downloads. *(Note: Structural checks ensure valid PDF payloads, though users should still inspect component revisions for second-source variations).*
 
 ### 2. Discord Bot (Slash Commands & Modular Architecture)
 Built with `discord.py` using a strict **1 Command = 1 File Cog** pattern and automatic cog discovery:
@@ -73,8 +73,9 @@ Built with `discord.py` using a strict **1 Command = 1 File Cog** pattern and au
 │           ├── ping_cog.py      # /ping latency
 │           └── purge_cog.py     # /purge channel cleaner
 ├── batch_download.py            # CLI: manual input mode
-├── tests/                       # Unit tests
-│   └── test_batch_http.py       # 29 test cases covering sanitization, parser, PDF checks
+├── tests/                       # Automated test suites (43 test cases)
+│   ├── test_batch_http.py       # 29 tests: sanitization, file parser, PDF header checks
+│   └── test_core_and_bot.py     # 14 tests: package classifier, specs regex, pinout heuristics, bot cogs
 ├── .env.example                 # Environment variables template
 ├── requirements.txt             # Python package dependencies
 └── .gitignore                   # Ignores .env, venv/, downloads/, cache images
@@ -140,7 +141,8 @@ python batch_download.py
 
 ### Running Test Suite
 ```bash
-python -m unittest tests.test_batch_http -v
+# Run all 43 automated unit & module tests:
+python -m unittest discover tests -v
 ```
 
 ---
