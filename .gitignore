@@ -25,3 +25,6 @@ downloads/
 .idea/
 *.swp
 .DS_Store
+
+# Local dev notes
+checkpoint.md
