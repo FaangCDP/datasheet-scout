@@ -1,14 +1,16 @@
 # 🔍 Datasheet Scout
 
-A high-performance electronic component datasheet scraper, batch downloader, and modular Discord bot with automated multi-source fallback (`datasheet4u.com` & `alldatasheet.com`), Cloudflare WAF bypass, pinout diagram extraction, and interactive Discord UI.
+A high-performance electronic component datasheet scraper, downloader, and modular Discord bot with automated multi-source fallback (`datasheet4u.com` & `alldatasheet.com`), Cloudflare WAF bypass, pinout diagram extraction, and interactive Discord UI.
+
+> **Note**: This is an experimental hobby project built for electronics tinkering and learning. Fully implemented by AI coding agents under human direction and prompt orchestration ("mandor").
 
 ---
 
 ## ⚡ Features
 
 ### 1. Multi-Source Scraping Engine
-- **Automated Fallback**: Primary search on `datasheet4u.com`. If no matches or low relevance scores are found, automatically failover to `alldatasheet.com`.
-- **Cloudflare TLS Fingerprint Bypass**: Employs `curl_cffi` browser impersonation (`chrome124`) to navigate Cloudflare bot-management walls without manual intervention.
+- **Automated Fallback**: Primary search on `datasheet4u.com`. If no matches or low relevance scores are found, automatically failovers to `alldatasheet.com`.
+- **Cloudflare TLS Fingerprint Bypass**: Employs `curl_cffi` browser impersonation (`chrome124`) to bypass Cloudflare bot walls without manual intervention.
 - **Intelligent Relevance Ranking**: Strips package suffixes (e.g., `LM358D` → `LM358`) to query clean base part numbers, scoring search results to prioritize exact matches (e.g., distinguishing `Arduino Uno` from `Arduino Nano`).
 - **File Integrity & Safety**: Sanitizes filename path separators to prevent path traversal errors and verifies binary magic bytes (`%PDF-`) to reject fake HTML/challenge response payloads.
 
@@ -31,14 +33,13 @@ Built with `discord.py` using a strict **1 Command = 1 File Cog** pattern and au
   - One-click live slash command tree sync (`tree.sync()`).
   - Auto-refreshes every 1 minute with a 15-minute active session timeout.
 - **`/ping`**: Gateway latency check in milliseconds.
-- **`/purge [jumlah]`**: Deletes up to 100 recent messages with a self-destructing 5-second confirmation notice.
+- **`/purge [jumlah]`**: Deletes recent messages with a self-destructing 5-second confirmation notice.
 - **`/info`**: System runtime and local datasheet cache statistics.
-- **`/myid`**: Instant user ID display for configuring `.env`.
+- **`/myid`**: Instant user ID display for configuring `OWNER_ID` in `.env`.
 - **`/help`**: Interactive command reference.
 
-### 3. Standalone CLI Tools
+### 3. Standalone CLI Tool
 - **`batch_download.py`**: Interactive CLI for manual component input (comma-separated for multi-part downloads).
-- **`batch_download_http.py`**: Automated batch downloader reading category files from `list/*.txt` with `--count` and `--yes` CLI flags.
 
 ---
 
@@ -61,7 +62,6 @@ Built with `discord.py` using a strict **1 Command = 1 File Cog** pattern and au
 │       ├── __init__.py
 │       ├── config.py            # Environment configuration loader
 │       ├── bot.py               # Main bot client with auto-discovery setup
-│       ├── .env.example         # Environment template
 │       └── cogs/                # Modular 1-file-per-command slash commands
 │           ├── __init__.py
 │           ├── datasheet_cog.py # /datasheet command & interactive views
@@ -73,10 +73,9 @@ Built with `discord.py` using a strict **1 Command = 1 File Cog** pattern and au
 │           ├── ping_cog.py      # /ping latency
 │           └── purge_cog.py     # /purge channel cleaner
 ├── batch_download.py            # CLI: manual input mode
-├── batch_download_http.py       # CLI: list/*.txt automated mode
-├── list/                        # Component list definitions (e.g. Microcontroller.txt)
 ├── tests/                       # Unit tests
 │   └── test_batch_http.py       # 29 test cases covering sanitization, parser, PDF checks
+├── .env.example                 # Environment variables template
 ├── requirements.txt             # Python package dependencies
 └── .gitignore                   # Ignores .env, venv/, downloads/, cache images
 ```
@@ -114,9 +113,9 @@ pip install -r requirements.txt
 ```
 
 ### 3. Environment Variables
-Copy the template and configure your Discord credentials:
+Copy `.env.example` to `.env` and fill in your values:
 ```bash
-cp bots/discord/.env.example .env
+cp .env.example .env
 ```
 Edit `.env`:
 ```env
@@ -134,13 +133,9 @@ MAX_FILE_SIZE_MB=25
 python -m bots.discord.bot
 ```
 
-### Running CLI Batch Downloaders
+### Running CLI Downloader
 ```bash
-# Interactive manual input:
 python batch_download.py
-
-# Automated list download from list/ directory:
-python batch_download_http.py --count 1 --yes
 ```
 
 ### Running Test Suite
@@ -150,5 +145,5 @@ python -m unittest tests.test_batch_http -v
 
 ---
 
-## 📄 License
-This project is for educational and hobbyist electronics practical work. Datasheets are intellectual properties of their respective semiconductor manufacturers.
+## 📄 License & Disclaimer
+This is an open hobbyist project. Datasheets and trademarks are intellectual properties of their respective semiconductor manufacturers.
