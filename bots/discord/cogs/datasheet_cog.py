@@ -226,6 +226,13 @@ class PackageSelectionView(discord.ui.View):
         await followup_msg.edit(content=None, embed=embed)
         await interaction.followup.send(files=files_to_send, ephemeral=True)
 
+        # Auto-clean: Hapus file thumbnail sementara setelah diunggah ke Discord CDN
+        try:
+            if thumb_path and os.path.isfile(thumb_path):
+                os.remove(thumb_path)
+        except OSError:
+            pass
+
 
 class DatasheetCog(commands.Cog):
     """Cog slash command pencarian dan pengunduhan datasheet."""
@@ -531,6 +538,13 @@ class DatasheetCog(commands.Cog):
                     files_to_send.append(thumb_file)
 
                 await interaction.followup.send(embed=embed, files=files_to_send)
+
+                # Auto-clean: Hapus file thumbnail sementara setelah diunggah ke Discord CDN
+                try:
+                    if thumb_path and os.path.isfile(thumb_path):
+                        os.remove(thumb_path)
+                except OSError:
+                    pass
             else:
                 embed.description = (
                     f"⚠️ Ukuran file ({file_size_mb:.1f} MB) melebihi batas upload Discord "

@@ -103,6 +103,13 @@ class PinoutCog(commands.Cog):
         discord_img = discord.File(img_path, filename="pinout.png")
         await interaction.followup.send(embed=embed, file=discord_img)
 
+        # Auto-clean: Hapus file gambar diagram pinout lokal setelah berhasil diunggah ke Discord CDN
+        try:
+            if img_path and os.path.isfile(img_path):
+                os.remove(img_path)
+        except OSError:
+            pass
+
     @pinout.autocomplete('komponen')
     async def pinout_autocomplete(
         self,
