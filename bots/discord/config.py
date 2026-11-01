@@ -20,3 +20,4 @@ DOWNLOAD_DIR = os.getenv(
     str(Path(__file__).resolve().parents[2] / "downloads")
 )
 MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "25"))
+ALLDATASHEET_PROXY = os.getenv("ALLDATASHEET_PROXY", "").strip()

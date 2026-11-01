@@ -127,7 +127,14 @@ def check_sources_health() -> dict:
     # 2. Cek alldatasheet.com
     t0 = time.time()
     try:
-        r2 = cffi_requests.get("https://www.alldatasheet.com/", timeout=4, impersonate="chrome124")
+        kwargs = {"timeout": 6, "impersonate": "chrome124"}
+        if getattr(config, "ALLDATASHEET_PROXY", ""):
+            kwargs["proxies"] = {
+                "http": config.ALLDATASHEET_PROXY,
+                "https": config.ALLDATASHEET_PROXY,
+            }
+
+        r2 = cffi_requests.get("https://www.alldatasheet.com/", **kwargs)
         ms2 = round((time.time() - t0) * 1000)
         status2 = "🟢 Aktif" if r2.status_code == 200 else f"🟡 HTTP {r2.status_code}"
     except Exception:

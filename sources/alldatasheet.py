@@ -26,8 +26,15 @@ def create_session() -> requests.Session:
     """
     Buat session HTTP khusus alldatasheet.com dengan impersonasi browser Chrome
     dan ambil cookies proteksi Cloudflare (__cf_bm) dari homepage.
+    Mendukung proxy opsional jika dijalankan di server dengan IP datacenter.
     """
     session = requests.Session(impersonate="chrome124")
+
+    # Dukungan proxy opsional (misal: residential proxy untuk bypass Cloudflare di VPS)
+    proxy_url = os.getenv("ALLDATASHEET_PROXY", "").strip()
+    if proxy_url:
+        session.proxies = {"http": proxy_url, "https": proxy_url}
+
     try:
         resp = session.get(BASE_URL + "/", timeout=30)
         resp.raise_for_status()
