@@ -47,7 +47,21 @@ class ProxyManager:
     """Mengelola rotasi dan validasi pool proxy."""
 
     def __init__(self, proxy_file: str | None = None):
-        self.proxy_file = proxy_file or os.getenv("PROXY_FILE", "proxies.txt")
+        if proxy_file:
+            self.proxy_file = proxy_file
+        elif os.getenv("PROXY_FILE"):
+            self.proxy_file = os.getenv("PROXY_FILE")
+        else:
+            # Cari proxies.txt di folder saat ini (CWD) atau di parent root proyek
+            cwd_file = os.path.join(os.getcwd(), "proxies.txt")
+            root_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "proxies.txt")
+            if os.path.isfile(cwd_file):
+                self.proxy_file = cwd_file
+            elif os.path.isfile(root_file):
+                self.proxy_file = root_file
+            else:
+                self.proxy_file = cwd_file
+
         self.proxies: list[str] = []
         self._load_proxies()
 
@@ -66,7 +80,7 @@ class ProxyManager:
         except Exception as e:
             print(f"[ProxyManager WARNING] Gagal membaca {self.proxy_file}: {e}")
 
-    def test_proxy(self, proxy_url: str, target_url: str = "https://www.alldatasheet.com/", timeout: int = 5) -> bool:
+    def test_proxy(self, proxy_url: str, target_url: str = "https://www.alldatasheet.com/", timeout: int = 8) -> bool:
         """Menguji apakah proxy aktif dan berhasil menembus target URL (HTTP 200)."""
         try:
             r = cffi_requests.get(
@@ -79,7 +93,7 @@ class ProxyManager:
         except Exception:
             return False
 
-    def get_working_proxy(self, target_url: str = "https://www.alldatasheet.com/", timeout: int = 5) -> str | None:
+    def get_working_proxy(self, target_url: str = "https://www.alldatasheet.com/", timeout: int = 8) -> str | None:
         """
         Mencari proxy pertama yang aktif dari daftar.
         Jika tidak ada proxy yang aktif atau file kosong, mengembalikan None (fallback IP ori).
