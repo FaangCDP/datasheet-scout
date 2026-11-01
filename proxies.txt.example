@@ -1,0 +1,12 @@
+# Daftar Proxy Cadangan (1 baris = 1 proxy)
+# Jika file ini kosong atau tidak ada, sistem otomatis memakai IP asli server.
+#
+# Format yang didukung:
+# 1. host:port:user:pass
+#    contoh: 185.199.229.156:7492:user123:pass456
+#
+# 2. http://user:pass@host:port
+#    contoh: http://user123:pass456@185.199.229.156:7492
+#
+# 3. host:port (tanpa password)
+#    contoh: 185.199.229.156:8080
