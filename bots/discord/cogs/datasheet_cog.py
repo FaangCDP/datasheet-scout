@@ -356,10 +356,10 @@ class DatasheetCog(commands.Cog):
         description="Cari katalog datasheet PDF komponen elektronik (Paginasi 5 hasil & kirim ke DM)"
     )
     @app_commands.describe(
-        komponen="Nama komponen elektronik yang dicari (Wajib, contoh: NE555, LM358, Arduino Uno)",
+        komponen="Nama komponen elektronik yang dicari (Wajib, contoh: NE555, LM35, LM358, Arduino Uno)",
         kemasan="Bentuk kemasan fisik spesifik (Opsional, contoh: DIP, SOIC, TO-92, TO-220)",
         pilihan_kemasan="Tampilkan tombol pilihan kemasan fisik unik (Opsional, default: False)",
-        jumlah="Jumlah total katalog yang dicari (Opsional, default: 15, maks: 25)",
+        jumlah="Jumlah total katalog yang dicari (Opsional, default: 25, maks: 50)",
         file="File .txt berisi daftar komponen tambahan (Opsional, 1 baris = 1 komponen)"
     )
     async def datasheet(
@@ -368,7 +368,7 @@ class DatasheetCog(commands.Cog):
         komponen: str,
         kemasan: str | None = None,
         pilihan_kemasan: bool = False,
-        jumlah: int = 15,
+        jumlah: int = 25,
         file: discord.Attachment | None = None,
     ):
         comp_name = komponen.strip()
@@ -379,7 +379,7 @@ class DatasheetCog(commands.Cog):
             )
             return
 
-        target_count = max(1, min(jumlah, 25))
+        target_count = max(5, min(jumlah, 50))
         target_pkg = kemasan.strip().upper() if kemasan else None
 
         # Respons selalu ephemeral: hanya terlihat oleh pengguna yang mengetik

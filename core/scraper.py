@@ -48,12 +48,26 @@ def compute_relevance(item: dict, query: str) -> float:
     if not p_clean or not q_clean:
         return 0.0
 
+    # 1. Exact match (identik sempurna, abaikan simbol)
     if p_clean == q_clean:
         return 100.0
+
+    # 2. Cek apakah diawali query dan diikuti suffix kemasan/grade (misal: LM35DT, LM35DZ, LM35AH)
+    # Jika query berakhir angka (seperti LM35), dan karakter berikutnya adalah HURUF (bukan angka),
+    # itu adalah varian langsung LM35 (LM35D, LM35DZ, LM35CAZ, dll) -> relevansi sangat tinggi!
+    # TAPI jika karakter berikutnya adalah ANGKA (misal LM358, LM350, LM3552),
+    # itu adalah KOMPONEN YANG BERBEDA!
     if p_clean.startswith(q_clean):
-        return 80.0
+        rest = p_clean[len(q_clean):]
+        if q_clean[-1].isdigit() and rest and rest[0].isdigit():
+            # Komponen berbeda! (misal LM35 -> LM358, LM350)
+            return 40.0
+        # Varian kemasan huruf (misal LM35 -> LM35D, LM35DZ)
+        return 90.0
+
+    # 3. Cek jika query ada di tengah tapi dipisahkan bukan angka
     if q_clean in p_clean:
-        return 60.0
+        return 50.0
 
     q_words = [w for w in re.split(r"[^a-zA-Z0-9]", query.lower()) if w]
     p_words = [w for w in re.split(r"[^a-zA-Z0-9]", part.lower()) if w]
@@ -66,23 +80,24 @@ def compute_relevance(item: dict, query: str) -> float:
     return 0.0
 
 
-def search_component(session=None, component_name: str = "", needed: int = 1) -> list[dict]:
+def search_component(session=None, component_name: str = "", needed: int = 15) -> list[dict]:
     """
     Cari komponen dengan mekanisme Relevance Ranking & Fallback Cerdas:
     1. Cari di datasheet4u.com dan ukur relevansi part number.
-    2. Jika hasil kosong ATAU relevansi rendah (< 50, misal hanya cocok substring nama pabrikan),
-       fallback otomatis ke alldatasheet.com.
-    3. Urutkan hasil akhir berdasarkan skor relevansi tertinggi ke terendah.
+    2. Jika hasil d4u tidak memiliki exact/near-match (skor < 85), gabungkan atau fallback ke alldatasheet.com.
+    3. Gabungkan dan urutkan hasil akhir berdasarkan skor relevansi tertinggi ke terendah.
     """
     comp_name = component_name.strip()
     if not comp_name:
         return []
 
-    # 1. Coba sumber utama (datasheet4u)
+    # Ambil pool kandidat yang lebih besar (minimal 25) agar paginasi katalog punya banyak pilihan
+    pool_size = max(needed * 2, 25)
+
     d4u_results = []
     try:
         s1 = session if session else datasheet4u.create_session()
-        hits = datasheet4u.search_component(s1, comp_name, needed=max(needed, 5))
+        hits = datasheet4u.search_component(s1, comp_name, needed=pool_size)
         if hits:
             for r in hits:
                 r["source"] = "datasheet4u"
@@ -90,34 +105,40 @@ def search_component(session=None, component_name: str = "", needed: int = 1) ->
     except Exception as e:
         print(f"[datasheet4u search error]: {e}")
 
-    # Cek apakah hasil datasheet4u relevan secara spesifik dengan part number
-    max_d4u_score = max((compute_relevance(r, comp_name) for r in d4u_results), default=0.0)
+    # Cek apakah ada exact match (skor 100) di hasil d4u
+    has_exact_d4u = any(compute_relevance(r, comp_name) == 100.0 for r in d4u_results)
 
-    if d4u_results and max_d4u_score >= 50.0:
-        d4u_results.sort(key=lambda r: compute_relevance(r, comp_name), reverse=True)
-        return d4u_results[:needed]
+    # Jika d4u TIDAK memiliki exact match (100) atau hasilnya kurang dari jumlah yang diminta,
+    # hubungi alldatasheet.com untuk mengambil komponen exact match
+    all_results = []
+    if not has_exact_d4u or len(d4u_results) < needed:
+        print(f"[AUTO-FALLBACK] '{comp_name}' (d4u tidak ada exact match 100), mencari di alldatasheet.com...")
+        try:
+            s2 = alldatasheet.create_session()
+            all_hits = alldatasheet.search_component(s2, comp_name, needed=pool_size)
+            if all_hits:
+                for r in all_hits:
+                    r["source"] = "alldatasheet"
+                all_results = all_hits
+        except Exception as e:
+            print(f"[alldatasheet fallback error]: {e}")
 
-    # 2. Fallback / Alternatif ke alldatasheet.com
-    print(f"[AUTO-FALLBACK] '{comp_name}' (skor d4u: {max_d4u_score}), mencari di alldatasheet.com...")
-    try:
-        s2 = alldatasheet.create_session()
-        all_hits = alldatasheet.search_component(s2, comp_name, needed=max(needed, 5))
-        if all_hits:
-            for r in all_hits:
-                r["source"] = "alldatasheet"
-            all_hits.sort(key=lambda r: compute_relevance(r, comp_name), reverse=True)
-            max_all_score = compute_relevance(all_hits[0], comp_name)
-            if max_all_score > max_d4u_score:
-                return all_hits[:needed]
-    except Exception as e:
-        print(f"[alldatasheet fallback error]: {e}")
+    # Gabungkan kedua sumber dan lakukan deduplikasi berdasarkan URL / part_no + mfr
+    combined = []
+    seen = set()
+    for item in (all_results + d4u_results if all_results else d4u_results):
+        key = (item.get("part_no", "").upper(), item.get("manufacturer", "").upper())
+        if key not in seen:
+            seen.add(key)
+            combined.append(item)
 
-    # Jika alldatasheet juga tidak lebih baik, kembalikan d4u jika ada
-    if d4u_results:
-        d4u_results.sort(key=lambda r: compute_relevance(r, comp_name), reverse=True)
-        return d4u_results[:needed]
-
-    return []
+    # Urutkan berdasarkan skor relevansi:
+    # 1. Exact match (LM35) -> skor 100
+    # 2. Varian huruf/kemasan (LM35D, LM35DZ, LM35CA) -> skor 90
+    # 3. Komponen lain (LM350, LM358) -> skor 40-50
+    # Jika query berakhir angka, prioritaskan item yang part_no dasarnya benar-benar cocok!
+    combined.sort(key=lambda r: compute_relevance(r, comp_name), reverse=True)
+    return combined[:needed]
 
 
 def download_single(session=None, result: dict = None, index: int = 1, download_folder: str = "downloads") -> str | None:

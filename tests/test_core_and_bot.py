@@ -147,7 +147,7 @@ class TestRelevanceRanking(unittest.TestCase):
 
     def test_prefix_match(self):
         score = compute_relevance({"part_no": "LM358AP"}, "LM358")
-        self.assertEqual(score, 80.0)
+        self.assertEqual(score, 90.0)
 
     def test_uno_vs_nano_disambiguation(self):
         score_uno = compute_relevance({"part_no": "ARDUINO-UNO"}, "Arduino Uno")

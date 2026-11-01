@@ -52,11 +52,13 @@ def create_session() -> requests.Session:
     else:
         print(f"[{NAME} INFO] Sesi AllDatasheet menggunakan koneksi direct (IP asli server).")
 
+    # Homepage AllDatasheet terkadang diproteksi WAF bot challenge jika diakses tanpa header lengkap.
+    # Kita hanya coba lakukan handshake ringan, dan tidak perlu memunculkan warning jika 403
+    # karena endpoint pencarian (/view.jsp) dan endpoint PDF tetap bekerja dengan normal.
     try:
-        resp = session.get(BASE_URL + "/", timeout=30)
-        resp.raise_for_status()
-    except Exception as e:
-        print(f"[{NAME} WARNING] Gagal mengakses homepage untuk cookies: {e}")
+        resp = session.get(BASE_URL + "/", timeout=15)
+    except Exception:
+        pass
     return session
 
 
