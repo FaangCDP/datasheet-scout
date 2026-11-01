@@ -46,6 +46,10 @@ def parse_proxy_line(line: str) -> str | None:
 class ProxyManager:
     """Mengelola rotasi dan validasi pool proxy."""
 
+    _cached_proxy: str | None = None
+    _last_check_time: float = 0.0
+    CACHE_DURATION: float = 300.0  # Simpan hasil proxy aktif selama 5 menit
+
     def __init__(self, proxy_file: str | None = None):
         if proxy_file:
             self.proxy_file = proxy_file
@@ -93,15 +97,24 @@ class ProxyManager:
         except Exception:
             return False
 
-    def get_working_proxy(self, target_url: str = "https://www.alldatasheet.com/", timeout: int = 8) -> str | None:
+    def get_working_proxy(self, target_url: str = "https://www.alldatasheet.com/", timeout: int = 8, force_refresh: bool = False) -> str | None:
         """
         Mencari proxy pertama yang aktif dari daftar.
         Jika tidak ada proxy yang aktif atau file kosong, mengembalikan None (fallback IP ori).
+        Hasil pencarian di-cache selama 5 menit agar tidak memboroskan kuota / rate-limit.
         """
+        import time
+        now = time.time()
+
+        if not force_refresh and (now - ProxyManager._last_check_time < ProxyManager.CACHE_DURATION):
+            return ProxyManager._cached_proxy
+
         # Muat ulang jika ada pembaruan pada file teks
         self._load_proxies()
 
         if not self.proxies:
+            ProxyManager._cached_proxy = None
+            ProxyManager._last_check_time = now
             return None
 
         print(f"[ProxyManager INFO] Menguji {len(self.proxies)} proxy pada '{self.proxy_file}'...")
@@ -112,9 +125,13 @@ class ProxyManager:
 
             if self.test_proxy(proxy, target_url=target_url, timeout=timeout):
                 print("🟢 AKTIF!")
+                ProxyManager._cached_proxy = proxy
+                ProxyManager._last_check_time = now
                 return proxy
             else:
                 print("🔴 MATI / GAGAL (Lanjut ke proxy berikutnya...)")
 
         print("[ProxyManager WARNING] Seluruh proxy pada daftar tidak merespons. Fallback ke IP direct server.")
+        ProxyManager._cached_proxy = None
+        ProxyManager._last_check_time = now
         return None

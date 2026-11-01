@@ -395,9 +395,12 @@ class PanelCog(commands.Cog):
             )
             return
 
+        # Defer terlebih dahulu agar Discord tidak timeout 3 detik (Unknown Interaction 10062)
+        await interaction.response.defer(ephemeral=True)
+
         view = OwnerPanelView(self.bot, interaction.user.id)
         embed = await asyncio.to_thread(view.build_panel_embed)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
         message = await interaction.original_response()
         asyncio.create_task(view.start_auto_refresh(message))
