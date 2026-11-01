@@ -72,18 +72,49 @@ def sanitize_filename(part_no: str, manufacturer: str) -> str:
 def search_component(session: requests.Session, component_name: str, needed: int = 5) -> list[dict]:
     """
     Cari komponen pada alldatasheet.com via /view.jsp?Searchword=...
-    
-    Returns:
-        list of dict: [{"source": "alldatasheet", "part_no": ..., "manufacturer": ..., "url": ..., "href": ..., "description": ...}]
+    Mendukung fallback impersonation dan direct retry jika proxy diblokir 403.
     """
     search_url = f"{BASE_URL}/view.jsp?Searchword={urllib.parse.quote(component_name)}"
+    search_headers = {
+        "Referer": "https://www.google.com/",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "cross-site",
+    }
+
+    resp = None
     try:
-        resp = session.get(search_url, timeout=30)
-        if resp.status_code != 200:
-            print(f"[{NAME} ERROR] HTTP status pencarian: {resp.status_code}")
-            return []
+        resp = session.get(search_url, headers=search_headers, timeout=30)
     except Exception as e:
-        print(f"[{NAME} ERROR] Gagal mencari '{component_name}': {e}")
+        print(f"[{NAME} WARNING] Request pencarian awal gagal: {e}")
+
+    # Jika proxy terkena Cloudflare HTTP 403 atau gagal
+    if resp is None or resp.status_code == 403:
+        if getattr(session, "proxies", None):
+            print(f"[{NAME} WARNING] Proxy terkena 403 pada AllDatasheet. Mencoba bypass otomatis via direct connection...")
+            try:
+                direct_session = requests.Session(impersonate="safari17_0")
+                resp = direct_session.get(search_url, headers=search_headers, timeout=25)
+                if resp.status_code == 200:
+                    session = direct_session  # Pakai sesi direct yang sukses
+            except Exception as e:
+                print(f"[{NAME} ERROR] Direct bypass juga gagal: {e}")
+
+    # Coba ganti TLS fingerprint ke chrome124 jika safari masih 403
+    if resp is None or resp.status_code == 403:
+        try:
+            retry_session = requests.Session(impersonate="chrome124")
+            resp = retry_session.get(search_url, headers=search_headers, timeout=25)
+            if resp.status_code == 200:
+                session = retry_session
+        except Exception:
+            pass
+
+    if resp is None or resp.status_code != 200:
+        status = resp.status_code if resp else "No Response"
+        print(f"[{NAME} ERROR] HTTP status pencarian: {status}")
         return []
 
     soup = BeautifulSoup(resp.text, "html.parser")

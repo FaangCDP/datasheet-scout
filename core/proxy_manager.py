@@ -84,13 +84,19 @@ class ProxyManager:
         except Exception as e:
             print(f"[ProxyManager WARNING] Gagal membaca {self.proxy_file}: {e}")
 
-    def test_proxy(self, proxy_url: str, target_url: str = "https://www.alldatasheet.com/", timeout: int = 8) -> bool:
+    def test_proxy(self, proxy_url: str, target_url: str = "https://www.alldatasheet.com/view.jsp?Searchword=NE555", timeout: int = 8) -> bool:
         """Menguji apakah proxy aktif dan berhasil menembus target URL (HTTP 200)."""
+        headers = {
+            "Referer": "https://www.google.com/",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
         # Coba safari17_0 terlebih dahulu (terbukti tembus Cloudflare pada proxy residential US), fallback ke chrome124
         for imp in ("safari17_0", "chrome124"):
             try:
                 r = cffi_requests.get(
                     target_url,
+                    headers=headers,
                     timeout=timeout,
                     impersonate=imp,
                     proxies={"http": proxy_url, "https": proxy_url}
