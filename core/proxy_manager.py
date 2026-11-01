@@ -86,16 +86,20 @@ class ProxyManager:
 
     def test_proxy(self, proxy_url: str, target_url: str = "https://www.alldatasheet.com/", timeout: int = 8) -> bool:
         """Menguji apakah proxy aktif dan berhasil menembus target URL (HTTP 200)."""
-        try:
-            r = cffi_requests.get(
-                target_url,
-                timeout=timeout,
-                impersonate="chrome124",
-                proxies={"http": proxy_url, "https": proxy_url}
-            )
-            return r.status_code == 200
-        except Exception:
-            return False
+        # Coba safari17_0 terlebih dahulu (terbukti tembus Cloudflare pada proxy residential US), fallback ke chrome124
+        for imp in ("safari17_0", "chrome124"):
+            try:
+                r = cffi_requests.get(
+                    target_url,
+                    timeout=timeout,
+                    impersonate=imp,
+                    proxies={"http": proxy_url, "https": proxy_url}
+                )
+                if r.status_code == 200:
+                    return True
+            except Exception:
+                pass
+        return False
 
     def get_working_proxy(self, target_url: str = "https://www.alldatasheet.com/", timeout: int = 8, force_refresh: bool = False) -> str | None:
         """

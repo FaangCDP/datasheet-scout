@@ -127,7 +127,7 @@ def check_sources_health() -> dict:
     # 2. Cek alldatasheet.com
     t0 = time.time()
     try:
-        kwargs = {"timeout": 6, "impersonate": "chrome124"}
+        kwargs = {"timeout": 8, "impersonate": "safari17_0"}
         
         # Cek apakah ada proxy aktif dari pool / ENV
         proxy_to_use = getattr(config, "ALLDATASHEET_PROXY", "")

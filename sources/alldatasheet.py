@@ -24,11 +24,12 @@ def human_delay(min_s: float = 0.8, max_s: float = 2.0):
 
 def create_session() -> requests.Session:
     """
-    Buat session HTTP khusus alldatasheet.com dengan impersonasi browser Chrome
+    Buat session HTTP khusus alldatasheet.com dengan impersonasi browser
     dan ambil cookies proteksi Cloudflare (__cf_bm) dari homepage.
     Mendukung rotasi proxy bertingkat (proxies.txt -> IP ori).
     """
-    session = requests.Session(impersonate="chrome124")
+    # Gunakan impersonasi safari17_0 (terbukti lolos Cloudflare WAF pada jaringan proxy)
+    session = requests.Session(impersonate="safari17_0")
 
     # 1. Cek proxy pool dari file proxies.txt / ENV
     active_proxy = None
