@@ -37,7 +37,13 @@ class HelpCog(commands.Cog):
 
         embed.add_field(
             name="🔌 `/pinout <komponen>`",
-            value="Mengekstrak dan menampilkan gambar diagram susunan pin/kaki komponen langsung di chat.",
+            value="Mengekstrak diagram susunan kaki komponen dan mengirimkannya ke DM pribadi Anda (privat & bersih).",
+            inline=False
+        )
+
+        embed.add_field(
+            name="🎲 `/random`",
+            value="Mengundi komponen elektronik secara acak untuk ide proyek atau belajar praktikum elektronika.",
             inline=False
         )
 

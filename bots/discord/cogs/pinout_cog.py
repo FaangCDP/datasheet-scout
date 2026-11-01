@@ -43,13 +43,14 @@ class PinoutCog(commands.Cog):
             )
             return
 
-        await interaction.response.defer(thinking=True)
+        await interaction.response.defer(thinking=True, ephemeral=True)
 
         # 1. Cari komponen di database
         results = await asyncio.to_thread(search_component, self.session, comp_name, 1)
         if not results:
             await interaction.followup.send(
-                f"❌ Komponen **{comp_name}** tidak ditemukan di database."
+                f"❌ Komponen **{comp_name}** tidak ditemukan di database.",
+                ephemeral=True
             )
             return
 
@@ -77,7 +78,8 @@ class PinoutCog(commands.Cog):
 
         if not file_path or not os.path.isfile(file_path):
             await interaction.followup.send(
-                f"⚠️ Berhasil menemukan **{part_no} ({mfr})**, tetapi berkas PDF tidak dapat diakses."
+                f"⚠️ Berhasil menemukan **{part_no} ({mfr})**, tetapi berkas PDF tidak dapat diakses.",
+                ephemeral=True
             )
             return
 
@@ -87,7 +89,8 @@ class PinoutCog(commands.Cog):
         if not img_path or not os.path.isfile(img_path):
             await interaction.followup.send(
                 f"⚠️ Diagram susunan kaki tidak dapat diekstrak otomatis dari PDF **{part_no}**.\n"
-                f"Silakan unduh dokumen lengkapnya melalui `/datasheet komponen:{comp_name}`."
+                f"Silakan unduh dokumen lengkapnya melalui `/datasheet komponen:{comp_name}`.",
+                ephemeral=True
             )
             return
 
@@ -100,8 +103,26 @@ class PinoutCog(commands.Cog):
         embed.set_image(url="attachment://pinout.png")
         embed.set_footer(text=f"Sumber: {source}.com • Gunakan /datasheet untuk PDF lengkap")
 
+        # Coba kirim via DM (Direct Message) terlebih dahulu
+        sent_to_dm = False
         discord_img = discord.File(img_path, filename="pinout.png")
-        await interaction.followup.send(embed=embed, file=discord_img)
+
+        try:
+            await interaction.user.send(embed=embed, file=discord_img)
+            sent_to_dm = True
+            await interaction.followup.send(
+                f"📬 Diagram pinout untuk **{part_no}** telah dikirim langsung ke **DM (Pesan Pribadi)** Anda!",
+                ephemeral=True
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            # Fallback jika DM pengguna ditutup/dikunci: kirim di server secara ephemeral
+            discord_img_fallback = discord.File(img_path, filename="pinout.png")
+            await interaction.followup.send(
+                content="⚠️ *Pesan Pribadi (DM) Anda terkunci. Menampilkan diagram secara privat di sini:*",
+                embed=embed,
+                file=discord_img_fallback,
+                ephemeral=True
+            )
 
         # Auto-clean: Hapus file gambar diagram pinout lokal setelah berhasil diunggah ke Discord CDN
         try:

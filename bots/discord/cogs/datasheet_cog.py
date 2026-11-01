@@ -1,9 +1,13 @@
 """
 bots/discord/cogs/datasheet_cog.py -- Slash Command: /datasheet
-Parameter:
-- komponen: str (Wajib)
-- jumlah: int (Opsional, default = 1)
-- file: discord.Attachment (Opsional)
+
+Fitur:
+1. Paginasi Katalog Interaktif (5 komponen per halaman) dengan tombol [◀ Sebelumnya] dan [Berikutnya ▶].
+2. Navigasi 100% Ephemeral (hanya terlihat oleh pemanggil command, zero spam di server).
+3. Pengiriman dokumen PDF & thumbnail langsung ke DM (Pesan Pribadi) pengguna.
+4. Fallback otomatis ke ephemeral channel jika DM pengguna terkunci.
+5. Pilihan kemasan interaktif (tombol variasi DIP, SOIC, dll).
+6. Auto-clean gambar cover thumbnail lokal setelah dikirim ke Discord.
 """
 
 import asyncio
@@ -28,33 +32,23 @@ from core.package_classifier import (
 )
 from bots.discord import config
 
-# Katalog komponen praktikum umum untuk saran instan autocomplete
 COMMON_COMPONENTS = [
-    # Mikrokontroler & Development Board
     "ATmega328P", "ATmega2560", "ATmega32", "ATmega16", "ATtiny85", "ATtiny13",
     "Arduino Uno", "Arduino Nano", "Arduino Mega 2560", "Arduino Pro Mini",
     "ESP32", "ESP32-S3", "ESP32-CAM", "ESP8266", "NodeMCU",
     "STM32F103C8", "STM32F401CC", "RP2040", "Raspberry Pi Pico",
     "PIC16F877A", "PIC18F4550", "PIC16F883",
-    # Op-Amp, Komparator & Linear IC
     "LM358", "LM324", "LM393", "LM339", "LM741", "TL072", "TL082", "NE5532", "OP07",
-    # Timer & RTC
     "NE555", "LM555", "DS3231", "DS1307",
-    # Regulator Tegangan & Power
     "LM7805", "LM7809", "LM7812", "LM317", "AMS1117-3.3", "AMS1117-5.0",
     "LM2596", "XL6009", "TP4056",
-    # Transistor BJT & MOSFET
     "BC547", "BC548", "BC557", "2N2222", "2N3904", "2N3906",
     "IRFZ44N", "IRF540N", "IRF3205", "TIP120", "TIP31C", "BD139", "BD140",
-    # IC Logika Digital & Driver
     "74HC595", "74HC165", "74HC00", "74HC04", "74HC08", "74HC32",
     "CD4017", "CD4051", "MAX232", "MAX485", "L293D", "L298N", "ULN2003",
-    # Audio Amplifier IC
     "TDA2003", "TDA2030", "TDA2050", "LM386", "PAM8403",
 ]
 
-
-# Kemasan / Package fisik komponen yang umum digunakan
 PACKAGE_CHOICES = [
     "DIP", "PDIP", "SOIC", "SOP", "TSSOP", "MSOP",
     "TO-92", "TO-220", "TO-126", "TO-3", "TO-247",
@@ -63,119 +57,270 @@ PACKAGE_CHOICES = [
 ]
 
 
-class PackageSelectButton(discord.ui.Button):
-    """Tombol pilihan kemasan individual."""
+async def deliver_datasheet(
+    interaction: discord.Interaction,
+    res: dict,
+    file_path: str,
+    target_pkg: str | None = None
+):
+    """Fungsi pembantu mengirim datasheet ke DM atau fallback ephemeral."""
+    part_no = res.get("part_no", "Component")
+    mfr = res.get("manufacturer", "Unknown")
+    desc = res.get("description", "Tidak ada deskripsi.")
+    detail_url = res.get("url", "")
+    source_site = res.get("source", "datasheet4u")
+    file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
 
+    embed = discord.Embed(
+        title=f"📄 Datasheet: {part_no}",
+        url=detail_url,
+        color=discord.Color.blue(),
+    )
+    embed.add_field(name="Pabrikan", value=mfr, inline=True)
+    embed.add_field(name="Ukuran File", value=f"{file_size_mb:.2f} MB", inline=True)
+
+    if target_pkg:
+        embed.add_field(name="Kemasan Diminta", value=f"`{target_pkg}`", inline=True)
+
+    specs = await asyncio.to_thread(extract_key_specs, file_path)
+    for spec_key, spec_val in specs.items():
+        embed.add_field(name=spec_key, value=spec_val, inline=True)
+
+    if desc:
+        embed.add_field(name="Deskripsi", value=desc[:1024], inline=False)
+    embed.set_footer(text=f"Sumber: {source_site}.com")
+
+    thumb_path = await asyncio.to_thread(extract_pdf_thumbnail, file_path)
+
+    # Siapkan lampiran file
+    if file_size_mb <= config.MAX_FILE_SIZE_MB:
+        # Coba kirim via DM (Direct Message)
+        try:
+            files_dm = [discord.File(file_path, filename=os.path.basename(file_path))]
+            if thumb_path and os.path.isfile(thumb_path):
+                files_dm.append(discord.File(thumb_path, filename="thumb_preview.png"))
+                embed.set_thumbnail(url="attachment://thumb_preview.png")
+
+            await interaction.user.send(embed=embed, files=files_dm)
+            await interaction.followup.send(
+                f"📬 Datasheet **{part_no}** telah dikirim langsung ke **DM (Pesan Pribadi)** Anda!",
+                ephemeral=True
+            )
+        except Exception:
+            # Fallback jika DM terkunci: kirim di server secara ephemeral
+            files_fallback = [discord.File(file_path, filename=os.path.basename(file_path))]
+            if thumb_path and os.path.isfile(thumb_path):
+                files_fallback.append(discord.File(thumb_path, filename="thumb_preview.png"))
+                embed.set_thumbnail(url="attachment://thumb_preview.png")
+
+            await interaction.followup.send(
+                content="⚠️ *Pesan Pribadi (DM) Anda terkunci. Menampilkan dokumen secara privat di sini:*",
+                embed=embed,
+                files=files_fallback,
+                ephemeral=True
+            )
+    else:
+        embed.description = (
+            f"⚠️ Ukuran file ({file_size_mb:.1f} MB) melebihi batas upload Discord "
+            f"({config.MAX_FILE_SIZE_MB} MB).\nSilakan unduh langsung dari tautan judul di atas."
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    # Auto-clean thumbnail
+    try:
+        if thumb_path and os.path.isfile(thumb_path):
+            os.remove(thumb_path)
+    except OSError:
+        pass
+
+
+class CatalogSelectDropdown(discord.ui.Select):
+    """Dropdown menu untuk memilih komponen mana dari 5 hasil di halaman aktif."""
+
+    def __init__(self, page_items: list[dict], start_idx: int):
+        options = []
+        for i, item in enumerate(page_items, start=start_idx + 1):
+            p_no = item.get("part_no", f"Item {i}")
+            mfr = item.get("manufacturer", "Unknown")[:50]
+            options.append(
+                discord.SelectOption(
+                    label=f"{i}. {p_no}"[:100],
+                    description=f"Pabrikan: {mfr}"[:100],
+                    value=str(i - 1),
+                )
+            )
+        super().__init__(
+            placeholder="Pilih komponen yang ingin diunduh PDF-nya...",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await self.view.handle_catalog_choice(interaction, int(self.values[0]))
+
+
+class CatalogPaginationView(discord.ui.View):
+    """View paginasi interaktif (5 hasil per halaman) dengan tombol Prev / Next."""
+
+    PAGE_SIZE = 5
+
+    def __init__(self, session, comp_name: str, all_results: list[dict], user_id: int, timeout: float = 120.0):
+        super().__init__(timeout=timeout)
+        self.session = session
+        self.comp_name = comp_name
+        self.all_results = all_results
+        self.user_id = user_id
+        self.current_page = 0
+        self.total_pages = max(1, (len(all_results) + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
+        self.update_components()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ Hanya pencari yang dapat mengontrol katalog ini.", ephemeral=True)
+            return False
+        return True
+
+    def build_embed(self) -> discord.Embed:
+        start = self.current_page * self.PAGE_SIZE
+        end = min(start + self.PAGE_SIZE, len(self.all_results))
+        page_items = self.all_results[start:end]
+
+        embed = discord.Embed(
+            title=f"📚 Katalog Datasheet: {self.comp_name}",
+            description=(
+                f"Ditemukan `{len(self.all_results)}` hasil pencarian.\n"
+                f"Halaman **{self.current_page + 1} dari {self.total_pages}** (Menampilkan hasil {start + 1}–{end}):\n\n"
+                f"*Pilih komponen dari menu dropdown di bawah untuk mengunduh PDF ke DM Anda.*"
+            ),
+            color=discord.Color.teal(),
+        )
+
+        for i, item in enumerate(page_items, start=start + 1):
+            p_no = item.get("part_no", "-")
+            mfr = item.get("manufacturer", "Unknown")
+            desc = item.get("description", "-")[:120]
+            src = item.get("source", "datasheet4u")
+            embed.add_field(
+                name=f"`{i}.` {p_no} ({mfr})",
+                value=f"• Deskripsi: {desc}\n• Sumber: `{src}.com`",
+                inline=False,
+            )
+
+        embed.set_footer(text="Navigasi privat • File PDF dikirim langsung ke DM")
+        return embed
+
+    def update_components(self):
+        self.clear_items()
+        start = self.current_page * self.PAGE_SIZE
+        end = min(start + self.PAGE_SIZE, len(self.all_results))
+        page_items = self.all_results[start:end]
+
+        # 1. Dropdown pemilih item di halaman ini
+        if page_items:
+            self.add_item(CatalogSelectDropdown(page_items, start))
+
+        # 2. Tombol Navigasi Prev
+        btn_prev = discord.ui.Button(
+            label="◀ Sebelumnya",
+            style=discord.ButtonStyle.secondary,
+            disabled=(self.current_page == 0),
+            row=1
+        )
+        btn_prev.callback = self.prev_page
+        self.add_item(btn_prev)
+
+        # 3. Tombol Navigasi Next
+        btn_next = discord.ui.Button(
+            label="Berikutnya ▶",
+            style=discord.ButtonStyle.primary,
+            disabled=(self.current_page >= self.total_pages - 1),
+            row=1
+        )
+        btn_next.callback = self.next_page
+        self.add_item(btn_next)
+
+    async def prev_page(self, interaction: discord.Interaction):
+        if self.current_page > 0:
+            self.current_page -= 1
+            self.update_components()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def next_page(self, interaction: discord.Interaction):
+        if self.current_page < self.total_pages - 1:
+            self.current_page += 1
+            self.update_components()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def handle_catalog_choice(self, interaction: discord.Interaction, index: int):
+        if index < 0 or index >= len(self.all_results):
+            await interaction.response.send_message("❌ Pilihan tidak valid.", ephemeral=True)
+            return
+
+        res = self.all_results[index]
+        part_no = res.get("part_no", self.comp_name)
+        mfr = res.get("manufacturer", "Unknown")
+        source = res.get("source", "datasheet4u")
+
+        await interaction.response.defer(ephemeral=True)
+
+        filename = sanitize_filename(part_no, mfr, source=source)
+        expected_file = os.path.join(config.DOWNLOAD_DIR, filename)
+
+        is_cached = (
+            os.path.isfile(expected_file)
+            and os.path.getsize(expected_file) > 1000
+            and os.path.getsize(expected_file) != 25307
+        )
+        if is_cached:
+            file_path = expected_file
+        else:
+            file_path = await asyncio.to_thread(
+                download_single, self.session, res, 1, config.DOWNLOAD_DIR
+            )
+
+        if not file_path or not os.path.isfile(file_path):
+            await interaction.followup.send(f"❌ Gagal mengunduh file PDF untuk **{part_no}**.", ephemeral=True)
+            return
+
+        await deliver_datasheet(interaction, res, file_path)
+
+
+class PackageSelectButton(discord.ui.Button):
     def __init__(self, label: str, custom_id: str, style=discord.ButtonStyle.primary):
         super().__init__(label=label, custom_id=custom_id, style=style)
 
     async def callback(self, interaction: discord.Interaction):
-        # Callback didelegasikan ke view induk
         await self.view.handle_package_choice(interaction, self.custom_id)
 
 
 class PackageSelectionView(discord.ui.View):
-    """View tombol interaktif untuk memilih kemasan mana yang ingin diunduh."""
-
     def __init__(self, session, comp_name: str, pkg_map: dict, timeout: float = 120.0):
         super().__init__(timeout=timeout)
         self.session = session
         self.comp_name = comp_name
-        self.pkg_map = pkg_map  # {"DIP": item_dict, "SOIC": item_dict, ...}
+        self.pkg_map = pkg_map
 
-        # Tambahkan 1 tombol per kemasan unik
         for pkg_name, item in pkg_map.items():
             btn_label = f"📦 {pkg_name} ({item.get('part_no')})"[:80]
             self.add_item(PackageSelectButton(label=btn_label, custom_id=f"pkg_{pkg_name}"))
 
-        # Tombol download semua sekaligus
-        if len(pkg_map) > 1:
-            self.add_item(
-                PackageSelectButton(
-                    label="📦 Unduh Semua (ZIP)",
-                    custom_id="pkg_ALL",
-                    style=discord.ButtonStyle.success,
-                )
-            )
-
     async def handle_package_choice(self, interaction: discord.Interaction, custom_id: str):
-        # Nonaktifkan tombol setelah diklik agar tidak terjadi double-request
         for child in self.children:
             child.disabled = True
         await interaction.response.edit_message(view=self)
 
         chosen = custom_id.replace("pkg_", "")
-        followup_msg = await interaction.followup.send(f"⏳ Sedang mengunduh varian `{chosen}`...", ephemeral=True)
-
-        # -------------------------------------------------------------
-        # Pilihan: Unduh Semua Package (ZIP)
-        # -------------------------------------------------------------
-        if chosen == "ALL":
-            downloaded = []
-            for pkg, res in self.pkg_map.items():
-                part_no = res.get("part_no", self.comp_name)
-                mfr = res.get("manufacturer", "Unknown")
-                source = res.get("source", "datasheet4u")
-                expected_fn = sanitize_filename(part_no, mfr, source=source)
-                expected_path = os.path.join(config.DOWNLOAD_DIR, expected_fn)
-
-                is_cached = (
-                    os.path.isfile(expected_path)
-                    and os.path.getsize(expected_path) > 1000
-                    and os.path.getsize(expected_path) != 25307
-                )
-                if is_cached:
-                    downloaded.append((res, expected_path))
-                else:
-                    file_path = await asyncio.to_thread(
-                        download_single, self.session, res, 1, config.DOWNLOAD_DIR
-                    )
-                    if file_path and os.path.isfile(file_path) and os.path.getsize(file_path) != 25307:
-                        downloaded.append((res, file_path))
-
-            if not downloaded:
-                await followup_msg.edit(content="❌ Gagal mengunduh file PDF untuk seluruh varian.")
-                return
-
-            zip_buffer = io.BytesIO()
-            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                for res, path in downloaded:
-                    zip_file.write(path, arcname=os.path.basename(path))
-
-            zip_buffer.seek(0)
-            zip_size_mb = len(zip_buffer.getvalue()) / (1024 * 1024)
-
-            embed = discord.Embed(
-                title=f"📦 Semua Kemasan: {self.comp_name} ({len(downloaded)} file)",
-                description=f"Berhasil mengunduh `{len(downloaded)}` varian kemasan unik.",
-                color=discord.Color.green(),
-            )
-            for res, path in downloaded:
-                embed.add_field(name=res.get("part_no"), value=f"• Pabrikan: {res.get('manufacturer')}", inline=False)
-
-            if zip_size_mb <= config.MAX_FILE_SIZE_MB:
-                discord_attachment = discord.File(
-                    zip_buffer, filename=f"{self.comp_name}_all_packages.zip"
-                )
-                await followup_msg.edit(content=None, embed=embed)
-                await interaction.followup.send(file=discord_attachment, ephemeral=True)
-            else:
-                await followup_msg.edit(content="⚠️ Ukuran zip melebihi limit upload Discord.")
-            return
-
-        # -------------------------------------------------------------
-        # Pilihan: Unduh 1 Package Tertentu
-        # -------------------------------------------------------------
         res = self.pkg_map.get(chosen)
         if not res:
-            await followup_msg.edit(content="❌ Varian kemasan tidak valid.")
+            await interaction.followup.send("❌ Varian kemasan tidak valid.", ephemeral=True)
             return
 
         part_no = res.get("part_no", self.comp_name)
         mfr = res.get("manufacturer", "Unknown")
-        desc = res.get("description", "Tidak ada deskripsi.")
-        detail_url = res.get("url", "")
         source_site = res.get("source", "datasheet4u")
+
+        await interaction.response.defer(ephemeral=True)
 
         expected_fn = sanitize_filename(part_no, mfr, source=source_site)
         expected_path = os.path.join(config.DOWNLOAD_DIR, expected_fn)
@@ -193,45 +338,10 @@ class PackageSelectionView(discord.ui.View):
             )
 
         if not file_path or not os.path.isfile(file_path):
-            await followup_msg.edit(content=f"❌ Gagal mengunduh datasheet untuk kemasan `{chosen}`.")
+            await interaction.followup.send(f"❌ Gagal mengunduh datasheet untuk `{chosen}`.", ephemeral=True)
             return
 
-        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-        embed = discord.Embed(
-            title=f"📄 Datasheet: {part_no} ({chosen})",
-            url=detail_url,
-            color=discord.Color.blue(),
-        )
-        embed.add_field(name="Pabrikan", value=mfr, inline=True)
-        embed.add_field(name="Kemasan", value=f"`{chosen}`", inline=True)
-        embed.add_field(name="Ukuran File", value=f"{file_size_mb:.2f} MB", inline=True)
-
-        specs = await asyncio.to_thread(extract_key_specs, file_path)
-        for spec_key, spec_val in specs.items():
-            embed.add_field(name=spec_key, value=spec_val, inline=True)
-
-        if desc:
-            embed.add_field(name="Deskripsi", value=desc[:1024], inline=False)
-        embed.set_footer(text=f"Sumber: {source_site}.com")
-
-        discord_file = discord.File(file_path, filename=os.path.basename(file_path))
-        files_to_send = [discord_file]
-
-        thumb_path = await asyncio.to_thread(extract_pdf_thumbnail, file_path)
-        if thumb_path and os.path.isfile(thumb_path):
-            thumb_file = discord.File(thumb_path, filename="thumb_preview.png")
-            embed.set_thumbnail(url="attachment://thumb_preview.png")
-            files_to_send.append(thumb_file)
-
-        await followup_msg.edit(content=None, embed=embed)
-        await interaction.followup.send(files=files_to_send, ephemeral=True)
-
-        # Auto-clean: Hapus file thumbnail sementara setelah diunggah ke Discord CDN
-        try:
-            if thumb_path and os.path.isfile(thumb_path):
-                os.remove(thumb_path)
-        except OSError:
-            pass
+        await deliver_datasheet(interaction, res, file_path, target_pkg=chosen)
 
 
 class DatasheetCog(commands.Cog):
@@ -243,13 +353,13 @@ class DatasheetCog(commands.Cog):
 
     @app_commands.command(
         name="datasheet",
-        description="Cari dan unduh datasheet PDF komponen elektronik"
+        description="Cari katalog datasheet PDF komponen elektronik (Paginasi 5 hasil & kirim ke DM)"
     )
     @app_commands.describe(
         komponen="Nama komponen elektronik yang dicari (Wajib, contoh: NE555, LM358, Arduino Uno)",
         kemasan="Bentuk kemasan fisik spesifik (Opsional, contoh: DIP, SOIC, TO-92, TO-220)",
-        pilihan_kemasan="Tampilkan tombol interaktif untuk memilih kemasan sebelum mengunduh (Opsional, default: False)",
-        jumlah="Jumlah varian datasheet yang ingin dicari/diunduh (Opsional, default: 1)",
+        pilihan_kemasan="Tampilkan tombol pilihan kemasan fisik unik (Opsional, default: False)",
+        jumlah="Jumlah total katalog yang dicari (Opsional, default: 15, maks: 25)",
         file="File .txt berisi daftar komponen tambahan (Opsional, 1 baris = 1 komponen)"
     )
     async def datasheet(
@@ -258,7 +368,7 @@ class DatasheetCog(commands.Cog):
         komponen: str,
         kemasan: str | None = None,
         pilihan_kemasan: bool = False,
-        jumlah: int = 1,
+        jumlah: int = 15,
         file: discord.Attachment | None = None,
     ):
         comp_name = komponen.strip()
@@ -269,38 +379,38 @@ class DatasheetCog(commands.Cog):
             )
             return
 
-        target_count = max(1, min(jumlah, 10))
+        target_count = max(1, min(jumlah, 25))
         target_pkg = kemasan.strip().upper() if kemasan else None
-        await interaction.response.defer(thinking=True)
 
-        # =====================================================================
-        # KASUS 0: Fitur Pilihan Kemasan Interaktif (Tombol Pilihan Package)
-        # =====================================================================
+        # Respons selalu ephemeral: hanya terlihat oleh pengguna yang mengetik
+        await interaction.response.defer(thinking=True, ephemeral=True)
+
+        # -----------------------------------------------------------------
+        # KASUS 0: Pilihan Ragam Kemasan Unik
+        # -----------------------------------------------------------------
         if pilihan_kemasan:
-            # Pangkas suffix bias kemasan pada query agar pencarian katalog bersih
             base_query = clean_base_component(comp_name)
             raw_hits = await asyncio.to_thread(search_component, self.session, base_query, 25)
 
             if not raw_hits:
                 await interaction.followup.send(
-                    f"❌ Tidak ditemukan data untuk komponen **{comp_name}** (basis: `{base_query}`)."
+                    f"❌ Tidak ditemukan data untuk komponen **{comp_name}** (basis: `{base_query}`).",
+                    ephemeral=True
                 )
                 return
 
             pkg_map = select_distinct_packages(raw_hits, max_items=5)
             if not pkg_map:
                 await interaction.followup.send(
-                    f"⚠️ Ditemukan hasil untuk **{comp_name}**, tetapi varian kemasan spesifik tidak terdeteksi secara otomatis.\n"
-                    f"Silakan gunakan `/datasheet komponen:{comp_name}` untuk mengunduh versi standar."
+                    f"⚠️ Ditemukan hasil untuk **{comp_name}**, tetapi varian kemasan spesifik tidak terdeteksi otomatis.\n"
+                    f"Silakan gunakan `/datasheet komponen:{comp_name}` untuk melihat katalog lengkap.",
+                    ephemeral=True
                 )
                 return
 
             embed = discord.Embed(
                 title=f"📦 Pilihan Kemasan Fisik: {base_query}",
-                description=(
-                    f"Ditemukan `{len(pkg_map)}` varian kemasan fisik unik untuk **{base_query}**.\n"
-                    f"Silakan **klik tombol kemasan** di bawah ini untuk mengunduh PDF yang sesuai:"
-                ),
+                description="Pilih salah satu tombol kemasan di bawah ini untuk mengunduh PDF ke DM Anda:",
                 color=discord.Color.gold(),
             )
             for pkg_name, item in pkg_map.items():
@@ -312,17 +422,16 @@ class DatasheetCog(commands.Cog):
                     inline=True,
                 )
 
-            embed.set_footer(text="Pilih tombol untuk hemat kuota dan ruang disk • Timeout 2 menit")
             view = PackageSelectionView(self.session, base_query, pkg_map)
-            await interaction.followup.send(embed=embed, view=view)
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
             return
 
-        # =====================================================================
-        # KASUS A: Pengguna melampirkan file .txt (Batch Search)
-        # =====================================================================
+        # -----------------------------------------------------------------
+        # KASUS A: Batch Search via File Attachment .txt
+        # -----------------------------------------------------------------
         if file is not None:
             if not file.filename.lower().endswith(".txt"):
-                await interaction.followup.send("⚠️ Format file lampiran harus berupa file teks berakhiran `.txt`.")
+                await interaction.followup.send("⚠️ Format file lampiran harus berupa file teks berakhiran `.txt`.", ephemeral=True)
                 return
 
             try:
@@ -332,7 +441,7 @@ class DatasheetCog(commands.Cog):
                 except UnicodeDecodeError:
                     text_content = raw_bytes.decode("latin-1", errors="ignore")
             except Exception as e:
-                await interaction.followup.send(f"❌ Gagal membaca file lampiran: {e}")
+                await interaction.followup.send(f"❌ Gagal membaca file lampiran: {e}", ephemeral=True)
                 return
 
             components = [comp_name]
@@ -347,241 +456,69 @@ class DatasheetCog(commands.Cog):
 
             MAX_BATCH = 10
             process_list = components[:MAX_BATCH]
-            extra_msg = f" (dibatasi {MAX_BATCH} komponen)" if len(components) > MAX_BATCH else ""
-
-            status_msg = await interaction.followup.send(
-                f"⏳ Sedang memproses **{len(process_list)} komponen**{extra_msg} (maks `{target_count}` varian per komponen)..."
+            await interaction.followup.send(
+                f"⏳ Sedang memproses **{len(process_list)} komponen** (file ZIP akan dikirimkan ke DM Anda)...",
+                ephemeral=True
             )
 
-            downloaded_files = []
-            not_found = []
-
+            downloaded = []
             for comp in process_list:
-                results = await asyncio.to_thread(search_component, self.session, comp, target_count)
+                results = await asyncio.to_thread(search_component, self.session, comp, 1)
                 if not results:
-                    not_found.append(comp)
                     continue
+                res = results[0]
+                part_no = res.get("part_no", comp)
+                mfr = res.get("manufacturer", "Unknown")
+                source = res.get("source", "datasheet4u")
+                fn = sanitize_filename(part_no, mfr, source=source)
+                exp = os.path.join(config.DOWNLOAD_DIR, fn)
+                if os.path.isfile(exp) and os.path.getsize(exp) > 1000:
+                    downloaded.append((res, exp))
+                else:
+                    fp = await asyncio.to_thread(download_single, self.session, res, 1, config.DOWNLOAD_DIR)
+                    if fp and os.path.isfile(fp):
+                        downloaded.append((res, fp))
 
-                for res in results:
-                    part_no = res.get("part_no", comp)
-                    mfr = res.get("manufacturer", "Unknown")
-                    source = res.get("source", "datasheet4u")
-                    expected_fn = sanitize_filename(part_no, mfr, source=source)
-                    expected_path = os.path.join(config.DOWNLOAD_DIR, expected_fn)
-
-                    is_cached = (
-                        os.path.isfile(expected_path)
-                        and os.path.getsize(expected_path) > 1000
-                        and os.path.getsize(expected_path) != 25307
-                    )
-                    if is_cached:
-                        downloaded_files.append((part_no, expected_path))
-                    else:
-                        saved_path = await asyncio.to_thread(
-                            download_single, self.session, res, 1, config.DOWNLOAD_DIR
-                        )
-                        if saved_path and os.path.isfile(saved_path) and os.path.getsize(saved_path) != 25307:
-                            downloaded_files.append((part_no, saved_path))
-                        else:
-                            not_found.append(comp)
-
-            if not downloaded_files:
-                await status_msg.edit(
-                    content="❌ Tidak ada datasheet yang berhasil ditemukan/diunduh untuk daftar komponen tersebut."
-                )
+            if not downloaded:
+                await interaction.followup.send("❌ Tidak ada datasheet yang berhasil diunduh.", ephemeral=True)
                 return
 
-            total_bytes = sum(os.path.getsize(path) for _, path in downloaded_files)
-            total_mb = total_bytes / (1024 * 1024)
-
-            summary_desc = (
-                f"✅ **{len(downloaded_files)} file** berhasil diunduh dari {len(process_list)} komponen.\n"
-                f"📦 Total ukuran: `{total_mb:.2f} MB`\n"
-            )
-            if not_found:
-                summary_desc += f"⚠️ Tidak ditemukan / gagal: {', '.join(set(not_found))}\n"
-
-            embed = discord.Embed(
-                title="📦 Hasil Batch Datasheet (.txt)",
-                description=summary_desc,
-                color=discord.Color.green(),
-            )
-            embed.set_footer(text="Sumber: Multi-Database (datasheet4u.com & alldatasheet.com)")
-
-            if len(downloaded_files) > 1:
-                zip_buffer = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                    for part, path in downloaded_files:
-                        zip_file.write(path, arcname=os.path.basename(path))
-
-                zip_buffer.seek(0)
-                zip_size_mb = len(zip_buffer.getvalue()) / (1024 * 1024)
-
-                if zip_size_mb <= config.MAX_FILE_SIZE_MB:
-                    discord_attachment = discord.File(
-                        zip_buffer, filename=f"datasheets_batch_{len(downloaded_files)}_files.zip"
-                    )
-                    await status_msg.edit(content=None, embed=embed)
-                    await interaction.followup.send(file=discord_attachment)
-                else:
-                    embed.description += (
-                        f"\n⚠️ Ukuran arsip zip ({zip_size_mb:.1f} MB) melebihi batas upload Discord "
-                        f"({config.MAX_FILE_SIZE_MB} MB)."
-                    )
-                    await status_msg.edit(content=None, embed=embed)
-            else:
-                single_part, single_path = downloaded_files[0]
-                single_mb = os.path.getsize(single_path) / (1024 * 1024)
-                if single_mb <= config.MAX_FILE_SIZE_MB:
-                    discord_attachment = discord.File(single_path, filename=os.path.basename(single_path))
-                    await status_msg.edit(content=None, embed=embed)
-                    await interaction.followup.send(file=discord_attachment)
-                else:
-                    await status_msg.edit(content=None, embed=embed)
-            return
-
-        # =====================================================================
-        # KASUS B: Pencarian komponen tunggal (dengan target_count)
-        # =====================================================================
-        # Jika kemasan ditentukan, ambil lebih banyak kandidat untuk difilter berdasarkan kemasan
-        fetch_limit = target_count * 3 if target_pkg else target_count
-        results = await asyncio.to_thread(search_component, self.session, comp_name, fetch_limit)
-
-        if not results:
-            await interaction.followup.send(
-                f"❌ Tidak ditemukan datasheet untuk komponen **{comp_name}** di database."
-            )
-            return
-
-        # Filter / Sortir hasil jika kemasan ditentukan
-        if target_pkg:
-            def pkg_match_score(r):
-                text_to_check = f"{r.get('part_no', '')} {r.get('description', '')}".upper()
-                if target_pkg in text_to_check:
-                    return 2
-                # Cek variasi DIP vs PDIP
-                if target_pkg in ("DIP", "PDIP") and any(d in text_to_check for d in ("DIP", "PDIP")):
-                    return 2
-                if target_pkg in ("SOIC", "SOP") and any(s in text_to_check for s in ("SOIC", "SOP")):
-                    return 2
-                return 0
-
-            results.sort(key=pkg_match_score, reverse=True)
-            results = results[:target_count]
-
-        downloaded = []
-        for res in results:
-            part_no = res.get("part_no", comp_name)
-            mfr = res.get("manufacturer", "Unknown")
-            source = res.get("source", "datasheet4u")
-            filename = sanitize_filename(part_no, mfr, source=source)
-            expected_file = os.path.join(config.DOWNLOAD_DIR, filename)
-
-            is_cached = (
-                os.path.isfile(expected_file)
-                and os.path.getsize(expected_file) > 1000
-                and os.path.getsize(expected_file) != 25307
-            )
-            if is_cached:
-                downloaded.append((res, expected_file))
-            else:
-                file_path = await asyncio.to_thread(
-                    download_single, self.session, res, 1, config.DOWNLOAD_DIR
-                )
-                if file_path and os.path.isfile(file_path) and os.path.getsize(file_path) != 25307:
-                    downloaded.append((res, file_path))
-
-        if not downloaded:
-            await interaction.followup.send(
-                f"⚠️ Berhasil menemukan varian untuk **{comp_name}**, tetapi gagal mengunduh PDF."
-            )
-            return
-
-        # Jika hanya 1 file (default)
-        if len(downloaded) == 1:
-            res, file_path = downloaded[0]
-            part_no = res.get("part_no", comp_name)
-            mfr = res.get("manufacturer", "Unknown")
-            desc = res.get("description", "Tidak ada deskripsi.")
-            detail_url = res.get("url", "")
-            source_site = res.get("source", "datasheet4u")
-            file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-
-            embed = discord.Embed(
-                title=f"📄 Datasheet: {part_no}",
-                url=detail_url,
-                color=discord.Color.blue(),
-            )
-            embed.add_field(name="Pabrikan", value=mfr, inline=True)
-            embed.add_field(name="Ukuran File", value=f"{file_size_mb:.2f} MB", inline=True)
-
-            if target_pkg:
-                embed.add_field(name="Kemasan Diminta", value=f"`{target_pkg}`", inline=True)
-
-            # Ekstrak ringkasan spesifikasi kunci (Tegangan, Clock, Package, dll.)
-            specs = await asyncio.to_thread(extract_key_specs, file_path)
-            for spec_key, spec_val in specs.items():
-                embed.add_field(name=spec_key, value=spec_val, inline=True)
-
-            if desc:
-                embed.add_field(name="Deskripsi", value=desc[:1024], inline=False)
-            embed.set_footer(text=f"Sumber: {source_site}.com")
-
-            if file_size_mb <= config.MAX_FILE_SIZE_MB:
-                discord_file = discord.File(file_path, filename=os.path.basename(file_path))
-                files_to_send = [discord_file]
-
-                thumb_path = await asyncio.to_thread(extract_pdf_thumbnail, file_path)
-                if thumb_path and os.path.isfile(thumb_path):
-                    thumb_file = discord.File(thumb_path, filename="thumb_preview.png")
-                    embed.set_thumbnail(url="attachment://thumb_preview.png")
-                    files_to_send.append(thumb_file)
-
-                await interaction.followup.send(embed=embed, files=files_to_send)
-
-                # Auto-clean: Hapus file thumbnail sementara setelah diunggah ke Discord CDN
-                try:
-                    if thumb_path and os.path.isfile(thumb_path):
-                        os.remove(thumb_path)
-                except OSError:
-                    pass
-            else:
-                embed.description = (
-                    f"⚠️ Ukuran file ({file_size_mb:.1f} MB) melebihi batas upload Discord "
-                    f"({config.MAX_FILE_SIZE_MB} MB).\nSilakan unduh langsung dari link di atas."
-                )
-                await interaction.followup.send(embed=embed)
-
-        else:
-            # Jika user meminta lebih dari 1 varian (> 1 file)
             zip_buffer = io.BytesIO()
-            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                 for res, path in downloaded:
-                    zip_file.write(path, arcname=os.path.basename(path))
+                    zf.write(path, arcname=os.path.basename(path))
 
             zip_buffer.seek(0)
-            zip_size_mb = len(zip_buffer.getvalue()) / (1024 * 1024)
+            zip_file = discord.File(zip_buffer, filename=f"{comp_name}_batch_datasheets.zip")
+            try:
+                await interaction.user.send(content=f"📦 Berikut arsip ZIP untuk {len(downloaded)} komponen:", file=zip_file)
+                await interaction.followup.send("📬 File ZIP berhasil dikirim ke **DM (Pesan Pribadi)** Anda!", ephemeral=True)
+            except Exception:
+                await interaction.followup.send(content="⚠️ DM terkunci. File dikirim di sini:", file=zip_file, ephemeral=True)
+            return
 
-            embed = discord.Embed(
-                title=f"📦 Datasheet Varian: {comp_name} ({len(downloaded)} file)",
-                description=f"Berhasil mengunduh `{len(downloaded)}` varian datasheet untuk **{comp_name}**.",
-                color=discord.Color.blue(),
+        # -----------------------------------------------------------------
+        # KASUS B: Pencarian Reguler (Paginasi 5 Hasil per Halaman)
+        # -----------------------------------------------------------------
+        results = await asyncio.to_thread(search_component, self.session, comp_name, target_count)
+        if not results:
+            await interaction.followup.send(
+                f"❌ Tidak ditemukan datasheet untuk komponen **{comp_name}** di database.",
+                ephemeral=True
             )
-            for res, path in downloaded:
-                p_no = res.get("part_no", comp_name)
-                m_fr = res.get("manufacturer", "Unknown")
-                embed.add_field(name=p_no, value=f"• Pabrikan: {m_fr}", inline=False)
+            return
 
-            embed.set_footer(text="Multi-Database Search")
+        # Sortir kemasan jika ditentukan pengguna
+        if target_pkg:
+            def pkg_match_score(r):
+                txt = f"{r.get('part_no', '')} {r.get('description', '')}".upper()
+                return 2 if target_pkg in txt else 0
+            results.sort(key=pkg_match_score, reverse=True)
 
-            if zip_size_mb <= config.MAX_FILE_SIZE_MB:
-                discord_attachment = discord.File(
-                    zip_buffer, filename=f"{comp_name}_datasheets_{len(downloaded)}_variants.zip"
-                )
-                await interaction.followup.send(embed=embed, file=discord_attachment)
-            else:
-                embed.description += f"\n⚠️ Ukuran arsip ({zip_size_mb:.1f} MB) melebihi batas upload Discord."
-                await interaction.followup.send(embed=embed)
+        # Buat View Paginasi (5 hasil per halaman)
+        view = CatalogPaginationView(self.session, comp_name, results, interaction.user.id)
+        embed = view.build_embed()
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     @datasheet.autocomplete('komponen')
     async def komponen_autocomplete(
@@ -589,23 +526,8 @@ class DatasheetCog(commands.Cog):
         interaction: discord.Interaction,
         current: str,
     ) -> list[app_commands.Choice[str]]:
-        """Menyajikan saran instan (autocomplete) nama komponen secara real-time."""
         catalog = set(COMMON_COMPONENTS)
 
-        # Sertakan komponen dari file folder list/
-        import glob
-        list_dir = os.path.join(os.path.dirname(config.DOWNLOAD_DIR), "list")
-        for f in glob.glob(os.path.join(list_dir, "*.txt")):
-            try:
-                with open(f, encoding="utf-8", errors="ignore") as fp:
-                    for line in fp:
-                        c = line.strip()
-                        if c and not c.startswith("#"):
-                            catalog.add(c)
-            except OSError:
-                pass
-
-        # Sertakan komponen yang sudah ada di folder downloads/
         if os.path.isdir(config.DOWNLOAD_DIR):
             for root, _, files in os.walk(config.DOWNLOAD_DIR):
                 for f in files:
@@ -630,7 +552,6 @@ class DatasheetCog(commands.Cog):
         interaction: discord.Interaction,
         current: str,
     ) -> list[app_commands.Choice[str]]:
-        """Menyajikan saran pilihan kemasan (package) fisik komponen."""
         cur = current.strip().upper()
         if not cur:
             suggestions = PACKAGE_CHOICES[:25]
