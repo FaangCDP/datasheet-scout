@@ -1,16 +1,23 @@
 """
 core/preview_extractor.py -- Modul Ekstraksi Thumbnail / Preview Halaman PDF
 
-Modul terpisah dan mandiri untuk mengekstrak halaman pertama PDF menjadi gambar thumbnail PNG.
-Tidak mengubah kode modul inti lain. Jika ekstraksi gagal, fungsi akan mengembalikan None
-sehingga proses utama pengiriman dokumen PDF tidak akan terganggu.
+Mendukung dua mesin rendering:
+1. pypdfium2 (Google PDFium Python Engine) - Mandiri, tidak butuh poppler OS (Cocok untuk Pterodactyl/VPS).
+2. pdftoppm (Poppler CLI) - Fallback native Linux jika tersedia.
 """
 
 import os
 import shutil
 import subprocess
 
-# Cek keberadaan binary pdftoppm di sistem
+# Cek ketersediaan pypdfium2 (prioritas utama untuk environment hosting container)
+try:
+    import pypdfium2 as pdfium
+    HAS_PYPDFIUM = True
+except ImportError:
+    HAS_PYPDFIUM = False
+
+# Cek keberadaan binary pdftoppm di sistem OS
 PDFTOPPM_BIN = shutil.which("pdftoppm")
 
 
@@ -24,11 +31,8 @@ def extract_pdf_thumbnail(pdf_path: str, max_width: int = 300) -> str | None:
 
     Returns:
         str: Path ke file thumbnail PNG jika berhasil.
-        None: Jika ekstraksi gagal atau pdftoppm tidak tersedia.
+        None: Jika ekstraksi gagal.
     """
-    if not PDFTOPPM_BIN:
-        return None
-
     if not pdf_path or not os.path.isfile(pdf_path):
         return None
 
@@ -38,42 +42,46 @@ def extract_pdf_thumbnail(pdf_path: str, max_width: int = 300) -> str | None:
         os.makedirs(thumb_dir, exist_ok=True)
 
         base_name = os.path.splitext(os.path.basename(pdf_path))[0]
-        output_prefix = os.path.join(thumb_dir, f"{base_name}_thumb")
-        expected_png = f"{output_prefix}-1.png"
-        expected_png_alt = f"{output_prefix}-01.png"
+        output_png = os.path.join(thumb_dir, f"{base_name}_thumb.png")
 
-        # Cek apakah thumbnail sudah pernah dibuat
-        if os.path.isfile(expected_png) and os.path.getsize(expected_png) > 500:
-            return expected_png
-        if os.path.isfile(expected_png_alt) and os.path.getsize(expected_png_alt) > 500:
-            return expected_png_alt
+        if os.path.isfile(output_png) and os.path.getsize(output_png) > 500:
+            return output_png
 
-        # Jalankan pdftoppm untuk render halaman pertama (-f 1 -l 1)
-        cmd = [
-            PDFTOPPM_BIN,
-            "-png",
-            "-f", "1",
-            "-l", "1",
-            "-scale-to", str(max_width),
-            pdf_path,
-            output_prefix,
-        ]
+        # METODE 1: pypdfium2 (Python engine mandiri)
+        if HAS_PYPDFIUM:
+            try:
+                pdf = pdfium.PdfDocument(pdf_path)
+                if len(pdf) > 0:
+                    page = pdf[0]
+                    # Hitung rasio skala agar lebar maksimal sesuai
+                    page_width = page.get_width()
+                    scale = (max_width / page_width) if page_width > 0 else 1.0
+                    pil_image = page.render(scale=scale).to_pil()
+                    pil_image.save(output_png, format="PNG")
+                    if os.path.isfile(output_png) and os.path.getsize(output_png) > 500:
+                        return output_png
+            except Exception as e:
+                print(f"[preview_extractor WARNING] PDFium render gagal, mencoba pdftoppm: {e}")
 
-        result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
-        if result.returncode != 0:
-            return None
-
-        if os.path.isfile(expected_png):
-            return expected_png
-        if os.path.isfile(expected_png_alt):
-            return expected_png_alt
-
-        # Cek jika ada file keluaran lain dengan prefix yang sama
-        for fname in os.listdir(thumb_dir):
-            if fname.startswith(f"{base_name}_thumb") and fname.endswith(".png"):
-                full_p = os.path.join(thumb_dir, fname)
-                if os.path.getsize(full_p) > 500:
-                    return full_p
+        # METODE 2: pdftoppm (Fallback Linux CLI)
+        if PDFTOPPM_BIN:
+            output_prefix = os.path.join(thumb_dir, f"{base_name}_thumb_ppm")
+            cmd = [
+                PDFTOPPM_BIN,
+                "-png",
+                "-f", "1",
+                "-l", "1",
+                "-scale-to", str(max_width),
+                pdf_path,
+                output_prefix,
+            ]
+            result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+            if result.returncode == 0:
+                for fname in os.listdir(thumb_dir):
+                    if fname.startswith(f"{base_name}_thumb_ppm") and fname.endswith(".png"):
+                        full_p = os.path.join(thumb_dir, fname)
+                        if os.path.getsize(full_p) > 500:
+                            return full_p
 
         return None
 

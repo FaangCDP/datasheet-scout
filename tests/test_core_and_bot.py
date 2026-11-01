@@ -133,7 +133,8 @@ class TestPinoutExtractor(unittest.TestCase):
             return res
 
         mock_subproc.side_effect = side_effect
-        detected_page = find_pinout_page("/fake/doc.pdf", max_pages=5)
+        with patch("core.pinout_extractor.HAS_PYPDFIUM", False):
+            detected_page = find_pinout_page("/fake/doc.pdf", max_pages=5)
         self.assertEqual(detected_page, 2)
 
 
