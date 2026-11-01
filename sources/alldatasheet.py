@@ -72,8 +72,12 @@ def sanitize_filename(part_no: str, manufacturer: str) -> str:
 def search_component(session: requests.Session, component_name: str, needed: int = 5) -> list[dict]:
     """
     Cari komponen pada alldatasheet.com via /view.jsp?Searchword=...
-    Mendukung fallback impersonation dan direct retry jika proxy diblokir 403.
+    Mendukung rotasi proxy terus menerus jika terkena flag 403 hingga menemukan proxy aktif,
+    lalu fallback ke direct IP jika seluruh proxy habis.
     """
+    from core.proxy_manager import ProxyManager
+    pm = ProxyManager()
+
     search_url = f"{BASE_URL}/view.jsp?Searchword={urllib.parse.quote(component_name)}"
     search_headers = {
         "Referer": "https://www.google.com/",
@@ -84,33 +88,42 @@ def search_component(session: requests.Session, component_name: str, needed: int
         "Sec-Fetch-Site": "cross-site",
     }
 
+    max_proxy_attempts = max(len(pm.proxies), 1) + 1  # Coba seluruh proxy + direct IP
     resp = None
-    try:
-        resp = session.get(search_url, headers=search_headers, timeout=30)
-    except Exception as e:
-        print(f"[{NAME} WARNING] Request pencarian awal gagal: {e}")
 
-    # Jika proxy terkena Cloudflare HTTP 403 atau gagal
-    if resp is None or resp.status_code == 403:
-        if getattr(session, "proxies", None):
-            print(f"[{NAME} WARNING] Proxy terkena 403 pada AllDatasheet. Mencoba bypass otomatis via direct connection...")
-            try:
-                direct_session = requests.Session(impersonate="safari17_0")
-                resp = direct_session.get(search_url, headers=search_headers, timeout=25)
-                if resp.status_code == 200:
-                    session = direct_session  # Pakai sesi direct yang sukses
-            except Exception as e:
-                print(f"[{NAME} ERROR] Direct bypass juga gagal: {e}")
+    for attempt in range(max_proxy_attempts):
+        current_proxy = session.proxies.get("http") if getattr(session, "proxies", None) else None
 
-    # Coba ganti TLS fingerprint ke chrome124 jika safari masih 403
-    if resp is None or resp.status_code == 403:
         try:
-            retry_session = requests.Session(impersonate="chrome124")
-            resp = retry_session.get(search_url, headers=search_headers, timeout=25)
+            resp = session.get(search_url, headers=search_headers, timeout=20)
             if resp.status_code == 200:
-                session = retry_session
-        except Exception:
-            pass
+                break
+            elif resp.status_code == 403:
+                print(f"[{NAME} WARNING] Proxy terkena flag HTTP 403. Merotasi ke proxy berikutnya...")
+                if current_proxy:
+                    pm.mark_proxy_dead(current_proxy)
+
+                # Ambil proxy berikutnya dari pool
+                next_proxy = pm.get_working_proxy(force_refresh=True)
+                if next_proxy:
+                    session = requests.Session(impersonate="safari17_0")
+                    session.proxies = {"http": next_proxy, "https": next_proxy}
+                    print(f"[{NAME} INFO] Berganti ke proxy baru: {next_proxy.split('@')[-1] if '@' in next_proxy else next_proxy}")
+                else:
+                    # Seluruh proxy sudah habis atau mati, fallback ke direct IP
+                    print(f"[{NAME} INFO] Seluruh proxy pada daftar telah dicoba/mati. Mencoba koneksi Direct IP...")
+                    session = requests.Session(impersonate="safari17_0")
+                    # Lanjut loop sekali lagi untuk direct IP
+        except Exception as e:
+            print(f"[{NAME} WARNING] Request gagal pada attempt {attempt + 1}: {e}")
+            if current_proxy:
+                pm.mark_proxy_dead(current_proxy)
+            next_proxy = pm.get_working_proxy(force_refresh=True)
+            if next_proxy:
+                session = requests.Session(impersonate="safari17_0")
+                session.proxies = {"http": next_proxy, "https": next_proxy}
+            else:
+                session = requests.Session(impersonate="safari17_0")
 
     if resp is None or resp.status_code != 200:
         status = resp.status_code if resp else "No Response"

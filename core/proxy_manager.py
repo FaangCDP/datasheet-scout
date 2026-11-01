@@ -107,7 +107,13 @@ class ProxyManager:
                 pass
         return False
 
-    def get_working_proxy(self, target_url: str = "https://www.alldatasheet.com/", timeout: int = 8, force_refresh: bool = False) -> str | None:
+    def mark_proxy_dead(self, proxy_url: str):
+        """Tandai proxy yang sedang dipakai sebagai mati/terblokir agar langsung rotasi ke proxy berikutnya."""
+        if ProxyManager._cached_proxy == proxy_url:
+            ProxyManager._cached_proxy = None
+            ProxyManager._last_check_time = 0.0
+
+    def get_working_proxy(self, target_url: str = "https://www.alldatasheet.com/view.jsp?Searchword=NE555", timeout: int = 8, force_refresh: bool = False) -> str | None:
         """
         Mencari proxy pertama yang aktif dari daftar.
         Jika tidak ada proxy yang aktif atau file kosong, mengembalikan None (fallback IP ori).
