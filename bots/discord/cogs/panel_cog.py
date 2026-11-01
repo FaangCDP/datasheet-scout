@@ -128,15 +128,27 @@ def check_sources_health() -> dict:
     t0 = time.time()
     try:
         kwargs = {"timeout": 6, "impersonate": "chrome124"}
-        if getattr(config, "ALLDATASHEET_PROXY", ""):
+        
+        # Cek apakah ada proxy aktif dari pool / ENV
+        proxy_to_use = getattr(config, "ALLDATASHEET_PROXY", "")
+        if not proxy_to_use:
+            try:
+                from core.proxy_manager import ProxyManager
+                pm = ProxyManager()
+                proxy_to_use = pm.get_working_proxy()
+            except Exception:
+                pass
+
+        if proxy_to_use:
             kwargs["proxies"] = {
-                "http": config.ALLDATASHEET_PROXY,
-                "https": config.ALLDATASHEET_PROXY,
+                "http": proxy_to_use,
+                "https": proxy_to_use,
             }
 
         r2 = cffi_requests.get("https://www.alldatasheet.com/", **kwargs)
         ms2 = round((time.time() - t0) * 1000)
-        status2 = "🟢 Aktif" if r2.status_code == 200 else f"🟡 HTTP {r2.status_code}"
+        proxy_tag = " (Proxy)" if proxy_to_use else " (Direct)"
+        status2 = f"🟢 Aktif{proxy_tag}" if r2.status_code == 200 else f"🟡 HTTP {r2.status_code}{proxy_tag}"
     except Exception:
         ms2 = round((time.time() - t0) * 1000)
         status2 = "🔴 Gangguan"
