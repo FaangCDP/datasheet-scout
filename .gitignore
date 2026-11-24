@@ -29,3 +29,7 @@ downloads/
 # Local dev notes
 checkpoint.md
 proxies.txt
+
+# Arsip riwayat git / bundle (bisa memuat blob lama termasuk .env)
+.git.zip
+*.zip

@@ -18,6 +18,7 @@ from core.scraper import (
 from core.pinout_extractor import extract_pinout_image
 from bots.discord import config
 from bots.discord.cogs.datasheet_cog import COMMON_COMPONENTS
+from bots.discord.guards import handle_cooldown, prune_cache
 
 
 class PinoutCog(commands.Cog):
@@ -29,8 +30,9 @@ class PinoutCog(commands.Cog):
 
     @app_commands.command(
         name="pinout",
-        description="Tampilkan gambar diagram susunan kaki/koneksi komponen elektronik"
+        description="Tampilkan gambar diagram susunan kaki/koneksi komponen elektronik",
     )
+    @app_commands.checks.cooldown(1, 120)
     @app_commands.describe(
         komponen="Nama komponen yang ingin dilihat diagram kakinya (contoh: NE555, LM358, Arduino Uno)"
     )
@@ -44,6 +46,9 @@ class PinoutCog(commands.Cog):
             return
 
         await interaction.response.defer(thinking=True, ephemeral=True)
+
+        # Anti disk penuh: prune PDF cache kadaluarsa/berlebih
+        prune_cache()
 
         # 1. Cari komponen di database
         results = await asyncio.to_thread(search_component, self.session, comp_name, 1)
@@ -129,6 +134,18 @@ class PinoutCog(commands.Cog):
             if img_path and os.path.isfile(img_path):
                 os.remove(img_path)
         except OSError:
+            pass
+
+    @pinout.error
+    async def pinout_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if await handle_cooldown(interaction, error):
+            return
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send("❌ Gagal memproses permintaan pinout. Coba lagi nanti.", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Gagal memproses permintaan pinout. Coba lagi nanti.", ephemeral=True)
+        except Exception:
             pass
 
     @pinout.autocomplete('komponen')

@@ -10,6 +10,8 @@ import re
 import shutil
 import subprocess
 
+from core.pdf_fetch import too_large_to_parse
+
 try:
     import pypdfium2 as pdfium
     HAS_PYPDFIUM = True
@@ -31,6 +33,10 @@ def extract_key_specs(pdf_path: str, max_pages: int = 3) -> dict[str, str]:
         dict: Pasangan {"Nama Parameter": "Nilai Parameter"} yang berhasil diekstrak.
     """
     if not pdf_path:
+        return {}
+
+    # Batas ukuran: PDF raksasa tidak diparse in-process (cegah OOM/parser abuse)
+    if too_large_to_parse(pdf_path):
         return {}
 
     text = ""

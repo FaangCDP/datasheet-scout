@@ -11,6 +11,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bots.discord.guards import handle_cooldown
+
 RANDOM_CURATED_COMPONENTS = [
     {
         "part_no": "NE555",
@@ -90,9 +92,25 @@ RANDOM_CURATED_COMPONENTS = [
 class RandomComponentView(discord.ui.View):
     """Tombol interaktif cepat untuk mengunduh datasheet atau melihat diagram pinout."""
 
-    def __init__(self, part_no: str, timeout: float = 120.0):
+    def __init__(self, part_no: str, user_id: int, timeout: float = 120.0):
         super().__init__(timeout=timeout)
         self.part_no = part_no
+        self.user_id = user_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ Hanya pengguna yang mengundi yang dapat memakai tombol ini.", ephemeral=True)
+            return False
+        return True
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item):
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send("❌ Terjadi kesalahan. Coba lagi nanti.", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Terjadi kesalahan. Coba lagi nanti.", ephemeral=True)
+        except Exception:
+            pass
 
     @discord.ui.button(label="📄 Ambil Datasheet (Katalog)", style=discord.ButtonStyle.primary, emoji="📥")
     async def get_datasheet(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -119,6 +137,7 @@ class RandomCog(commands.Cog):
         name="random",
         description="Undi komponen elektronik acak untuk inspirasi proyek atau belajar praktikum"
     )
+    @app_commands.checks.cooldown(1, 30)
     async def random_cmd(self, interaction: discord.Interaction):
         item = random.choice(RANDOM_CURATED_COMPONENTS)
 
@@ -131,8 +150,20 @@ class RandomCog(commands.Cog):
         embed.add_field(name="Contoh Penggunaan", value=item["common_uses"], inline=False)
         embed.set_footer(text="Navigasi privat • Gunakan tombol di bawah untuk eksplorasi")
 
-        view = RandomComponentView(item["part_no"])
+        view = RandomComponentView(item["part_no"], interaction.user.id)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @random_cmd.error
+    async def random_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if await handle_cooldown(interaction, error):
+            return
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send("❌ Gagal memproses permintaan. Coba lagi nanti.", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Gagal memproses permintaan. Coba lagi nanti.", ephemeral=True)
+        except Exception:
+            pass
 
 
 async def setup(bot: commands.Bot):

@@ -8,11 +8,27 @@ spesifik untuk situs https://datasheet4u.com.
 import os
 import random
 import time
+import urllib.parse
 import requests
 from bs4 import BeautifulSoup
 
+from core import pdf_fetch
+
 NAME = "datasheet4u"
-BASE_URL = "https://datasheet4u.com"
+BASE_URL = "https://www.datasheet4u.com"
+
+# Hanya URL https ke domain ini (atau subdomainnya) yang boleh di-request.
+ALLOWED_HOSTS = ("datasheet4u.com",)
+
+
+def is_allowed_url(url: str) -> bool:
+    """True hanya untuk URL https ke domain sumber (cegah SSRF / URL absolut dari HTML)."""
+    parsed = urllib.parse.urlparse(url or "")
+    if parsed.scheme != "https" or not parsed.hostname:
+        return False
+    host = parsed.hostname.lower()
+    return any(host == h or host.endswith("." + h) for h in ALLOWED_HOSTS)
+
 
 # Konfigurasi Header Khusus datasheet4u.com:
 # Hanya izinkan 'gzip, deflate'. Jangan sertakan 'br' (Brotli) karena
@@ -94,6 +110,9 @@ def search_component(session: requests.Session, component_name: str, needed: int
         tds = row.select("td")
         description = tds[-1].get_text(strip=True) if len(tds) >= 3 else ""
         full_url = f"{BASE_URL}{href}" if href.startswith("/") else href
+        if not is_allowed_url(full_url):
+            print(f"[{NAME} WARNING] Tautan hasil pencarian ditolak (host di luar allowlist).")
+            continue
 
         if any(r["href"] == href for r in results):
             continue
@@ -125,6 +144,10 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
     if not detail_url:
         return None
 
+    if not is_allowed_url(detail_url):
+        print(f"[{NAME} ERROR] URL detail ditolak (host di luar allowlist).")
+        return None
+
     os.makedirs(download_folder, exist_ok=True)
     human_delay(0.8, 1.8)
 
@@ -148,6 +171,9 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
         return None
 
     download_url = f"{BASE_URL}{download_href}" if download_href.startswith("/") else download_href
+    if not is_allowed_url(download_url):
+        print(f"[{NAME} ERROR] URL unduhan ditolak (host di luar allowlist).")
+        return None
     human_delay(0.8, 1.8)
 
     # 2. Halaman unduh
@@ -182,12 +208,19 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
         return None
 
     pdf_url = f"{BASE_URL}{pdf_href}" if pdf_href.startswith("/") else pdf_href
+    if not is_allowed_url(pdf_url):
+        print(f"[{NAME} ERROR] URL PDF ditolak (host di luar allowlist).")
+        return None
     human_delay(0.8, 1.8)
 
-    # 3. Stream & validasi berkas PDF
+    # 3. Stream & validasi berkas PDF (batas ukuran untuk mencegah penuhnya disk)
     try:
         resp = session.get(pdf_url, headers={"Referer": download_url}, timeout=120, stream=True)
         if resp.status_code != 200:
+            return None
+
+        if pdf_fetch.content_length_exceeds(resp):
+            print(f"[{NAME} ERROR] PDF melebihi batas {pdf_fetch.MAX_PDF_BYTES // (1024 * 1024)} MB, unduhan dibatalkan.")
             return None
 
         chunks = resp.iter_content(chunk_size=65536)
@@ -199,27 +232,26 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
         filename = sanitize_filename(part_no, manufacturer)
         file_path = os.path.join(download_folder, filename)
 
-        with open(file_path, "wb") as f:
-            f.write(first_chunk)
-            for chunk in chunks:
-                if chunk:
-                    f.write(chunk)
+        file_sz = pdf_fetch.write_capped(chunks, file_path, initial=first_chunk)
+        if file_sz is None:
+            print(f"[{NAME} ERROR] Berkas melebihi batas {pdf_fetch.MAX_PDF_BYTES // (1024 * 1024)} MB, unduhan dibatalkan.")
+            return None
 
         # Validasi kelengkapan berkas: minimal 2KB dan pengecekan trailer %%EOF
-        file_sz = os.path.getsize(file_path)
-        if file_sz < 2048:
+        if file_sz < pdf_fetch.MIN_PDF_BYTES:
             print(f"[{NAME} ERROR] Ukuran berkas PDF terlalu kecil ({file_sz} bytes), diduga rusak.")
             try:
                 os.remove(file_path)
             except OSError:
                 pass
+
             return None
 
         with open(file_path, "rb") as f:
             f.seek(max(0, file_sz - 1024))
             tail = f.read()
-            if b"%%EOF" not in tail:
-                print(f"[{NAME} WARNING] Penanda %%EOF tidak ditemukan di akhir berkas (berkas mungkin terpotong).")
+        if b"%%EOF" not in tail:
+            print(f"[{NAME} WARNING] Penanda %%EOF tidak ditemukan di akhir berkas (berkas mungkin terpotong).")
 
         return file_path
 

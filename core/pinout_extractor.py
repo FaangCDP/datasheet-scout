@@ -10,6 +10,8 @@ import re
 import shutil
 import subprocess
 
+from core.pdf_fetch import too_large_to_parse
+
 try:
     import pypdfium2 as pdfium
     HAS_PYPDFIUM = True
@@ -103,6 +105,10 @@ def extract_pinout_image(pdf_path: str, resolution: int = 150) -> tuple[str | No
         tuple (path_gambar_png, nomor_halaman) jika berhasil, atau (None, None) jika gagal.
     """
     if not pdf_path or not os.path.isfile(pdf_path):
+        return None, None
+
+    # Batas ukuran: PDF raksasa tidak dirender in-process (cegah OOM/parser abuse)
+    if too_large_to_parse(pdf_path):
         return None, None
 
     try:

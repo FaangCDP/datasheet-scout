@@ -13,8 +13,23 @@ import urllib.parse
 from bs4 import BeautifulSoup
 from curl_cffi import requests
 
+from core import pdf_fetch
+
 NAME = "alldatasheet"
 BASE_URL = "https://www.alldatasheet.com"
+
+# Hanya URL https ke domain ini (atau subdomainnya) yang boleh di-request.
+ALLOWED_HOSTS = ("alldatasheet.com",)
+
+
+def is_allowed_url(url: str) -> bool:
+    """True hanya untuk URL https ke domain sumber (cegah SSRF / URL absolut dari HTML)."""
+    parsed = urllib.parse.urlparse(url or "")
+    if parsed.scheme != "https" or not parsed.hostname:
+        return False
+    host = parsed.hostname.lower()
+    return any(host == h or host.endswith("." + h) for h in ALLOWED_HOSTS)
+
 
 
 def human_delay(min_s: float = 0.8, max_s: float = 2.0):
@@ -163,6 +178,9 @@ def search_component(session: requests.Session, component_name: str, needed: int
                     break
 
         full_url = "https:" + href if href.startswith("//") else href
+        if not is_allowed_url(full_url):
+            print(f"[{NAME} WARNING] Tautan hasil pencarian ditolak (host di luar allowlist).")
+            continue
 
         results.append({
             "source": NAME,
@@ -190,6 +208,10 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
     detail_url = result.get("url")
 
     if not detail_url:
+        return None
+
+    if not is_allowed_url(detail_url):
+        print(f"[{NAME} ERROR] URL detail ditolak (host di luar allowlist).")
         return None
 
     os.makedirs(download_folder, exist_ok=True)
@@ -250,37 +272,50 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
         print(f"[{NAME} ERROR] Tautan PDF tidak ditemukan di halaman viewer")
         return None
 
+    if not is_allowed_url(pdf_url):
+        print(f"[{NAME} ERROR] URL PDF ditolak (host di luar allowlist).")
+        return None
+
     human_delay(0.8, 1.8)
 
-    # 3. Unduh berkas PDF aktual dengan Referer viewer iframe
+    # 3. Unduh berkas PDF aktual dengan Referer viewer iframe (stream + batas ukuran)
     try:
-        r_pdf = session.get(pdf_url, headers={"Referer": raw_viewer_url}, timeout=60)
+        r_pdf = session.get(pdf_url, headers={"Referer": raw_viewer_url}, timeout=60, stream=True)
         if r_pdf.status_code != 200:
             print(f"[{NAME} ERROR] Gagal mengunduh PDF: HTTP {r_pdf.status_code}")
             return None
 
-        if not r_pdf.content.startswith(b"%PDF-"):
+        if pdf_fetch.content_length_exceeds(r_pdf):
+            print(f"[{NAME} ERROR] PDF melebihi batas {pdf_fetch.MAX_PDF_BYTES // (1024 * 1024)} MB, unduhan dibatalkan.")
+            return None
+
+        content = pdf_fetch.read_capped(r_pdf)
+        if content is None:
+            print(f"[{NAME} ERROR] PDF kosong atau melebihi batas {pdf_fetch.MAX_PDF_BYTES // (1024 * 1024)} MB.")
+            return None
+
+        if not content.startswith(b"%PDF-"):
             print(f"[{NAME} ERROR] Konten respons bukan PDF valid!")
             return None
 
         # Deteksi PDF dummy error (AllDatasheet mengirim PDF dummy 25.307 bytes saat hotlink dicegah)
-        if len(r_pdf.content) == 25307:
+        if len(content) == 25307:
             print(f"[{NAME} ERROR] Terdeteksi PDF dummy error AllDatasheet (website unavailable banner)!")
             return None
 
         # Validasi ukuran minimal dan penanda akhir %%EOF
-        if len(r_pdf.content) < 2048:
-            print(f"[{NAME} ERROR] Ukuran file PDF terlalu kecil ({len(r_pdf.content)} bytes).")
+        if len(content) < pdf_fetch.MIN_PDF_BYTES:
+            print(f"[{NAME} ERROR] Ukuran file PDF terlalu kecil ({len(content)} bytes).")
             return None
 
-        if b"%%EOF" not in r_pdf.content[-1024:]:
+        if b"%%EOF" not in content[-1024:]:
             print(f"[{NAME} WARNING] Penanda %%EOF tidak ditemukan di akhir berkas (berkas mungkin terpotong).")
 
         filename = sanitize_filename(part_no, manufacturer)
         file_path = os.path.join(download_folder, filename)
 
         with open(file_path, "wb") as f:
-            f.write(r_pdf.content)
+            f.write(content)
 
         return file_path
 

@@ -13,6 +13,7 @@ Fitur:
 import asyncio
 import io
 import os
+import re
 import zipfile
 import discord
 from discord import app_commands
@@ -31,6 +32,14 @@ from core.package_classifier import (
     select_distinct_packages,
 )
 from bots.discord import config
+from bots.discord.guards import handle_cooldown, prune_cache
+
+
+def _safe_text(value, limit: int = 1024) -> str:
+    """Escape markdown dan buang URL dari teks pihak ketiga (cegah phishing / embed injection)."""
+    text = discord.utils.escape_markdown(str(value or ""))
+    text = re.sub(r"https?://\S+", "[tautan]", text)
+    return text[:limit]
 
 COMMON_COMPONENTS = [
     "ATmega328P", "ATmega2560", "ATmega32", "ATmega16", "ATtiny85", "ATtiny13",
@@ -72,25 +81,32 @@ async def deliver_datasheet(
     file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
 
     embed = discord.Embed(
-        title=f"📄 Datasheet: {part_no}",
+        title=f"📄 Datasheet: {_safe_text(part_no, 200)}",
         url=detail_url,
         color=discord.Color.blue(),
     )
-    embed.add_field(name="Pabrikan", value=mfr, inline=True)
+    embed.add_field(name="Pabrikan", value=_safe_text(mfr, 200), inline=True)
     embed.add_field(name="Ukuran File", value=f"{file_size_mb:.2f} MB", inline=True)
 
     if target_pkg:
-        embed.add_field(name="Kemasan Diminta", value=f"`{target_pkg}`", inline=True)
+        embed.add_field(name="Kemasan Diminta", value=f"`{_safe_text(target_pkg, 50)}`", inline=True)
 
-    specs = await asyncio.to_thread(extract_key_specs, file_path)
-    for spec_key, spec_val in specs.items():
-        embed.add_field(name=spec_key, value=spec_val, inline=True)
+    # Ekstraksi spec/thumbnail bersifat opsional: kegagalan di sini tidak boleh menggagalkan pengiriman PDF.
+    try:
+        specs = await asyncio.to_thread(extract_key_specs, file_path)
+        for spec_key, spec_val in specs.items():
+            embed.add_field(name=_safe_text(spec_key, 100), value=_safe_text(spec_val, 200), inline=True)
+    except Exception:
+        pass
 
     if desc:
-        embed.add_field(name="Deskripsi", value=desc[:1024], inline=False)
+        embed.add_field(name="Deskripsi", value=_safe_text(desc, 1024), inline=False)
     embed.set_footer(text=f"Sumber: {source_site}.com")
 
-    thumb_path = await asyncio.to_thread(extract_pdf_thumbnail, file_path)
+    try:
+        thumb_path = await asyncio.to_thread(extract_pdf_thumbnail, file_path)
+    except Exception:
+        thumb_path = None
 
     # Siapkan lampiran file
     if file_size_mb <= config.MAX_FILE_SIZE_MB:
@@ -175,13 +191,20 @@ class CatalogPaginationView(discord.ui.View):
         self.total_pages = max(1, (len(all_results) + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
         self.update_components()
 
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item):
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send("❌ Gagal mengolah pilihan katalog. Coba lagi nanti.", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Gagal mengolah pilihan katalog. Coba lagi nanti.", ephemeral=True)
+        except Exception:
+            pass
+
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("❌ Hanya pencari yang dapat mengontrol katalog ini.", ephemeral=True)
             return False
         return True
-
-    def build_embed(self) -> discord.Embed:
         start = self.current_page * self.PAGE_SIZE
         end = min(start + self.PAGE_SIZE, len(self.all_results))
         page_items = self.all_results[start:end]
@@ -197,9 +220,9 @@ class CatalogPaginationView(discord.ui.View):
         )
 
         for i, item in enumerate(page_items, start=start + 1):
-            p_no = item.get("part_no", "-")
-            mfr = item.get("manufacturer", "Unknown")
-            desc = item.get("description", "-")[:120]
+            p_no = _safe_text(item.get("part_no", "-"), 100)
+            mfr = _safe_text(item.get("manufacturer", "Unknown"), 60)
+            desc = _safe_text(item.get("description", "-")[:120], 120)
             src = item.get("source", "datasheet4u")
             embed.add_field(
                 name=f"`{i}.` {p_no} ({mfr})",
@@ -295,15 +318,28 @@ class PackageSelectButton(discord.ui.Button):
 
 
 class PackageSelectionView(discord.ui.View):
-    def __init__(self, session, comp_name: str, pkg_map: dict, timeout: float = 120.0):
+    def __init__(self, session, comp_name: str, pkg_map: dict, user_id: int, timeout: float = 120.0):
         super().__init__(timeout=timeout)
         self.session = session
         self.comp_name = comp_name
         self.pkg_map = pkg_map
+        self.user_id = user_id
 
         for pkg_name, item in pkg_map.items():
             btn_label = f"📦 {pkg_name} ({item.get('part_no')})"[:80]
             self.add_item(PackageSelectButton(label=btn_label, custom_id=f"pkg_{pkg_name}"))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.user_id
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item):
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send("❌ Gagal memproses pilihan kemasan. Coba lagi nanti.", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Gagal memproses pilihan kemasan. Coba lagi nanti.", ephemeral=True)
+        except Exception:
+            pass
 
     async def handle_package_choice(self, interaction: discord.Interaction, custom_id: str):
         for child in self.children:
@@ -353,8 +389,9 @@ class DatasheetCog(commands.Cog):
 
     @app_commands.command(
         name="datasheet",
-        description="Cari katalog datasheet PDF komponen elektronik (Paginasi 5 hasil & kirim ke DM)"
+        description="Cari katalog datasheet PDF komponen elektronik (Paginasi 5 hasil & kirim ke DM)",
     )
+    @app_commands.checks.cooldown(1, 120)  # 1 permintaan per pengguna setiap 120 detik (anti disk penuh)
     @app_commands.describe(
         komponen="Nama komponen elektronik yang dicari (Wajib, contoh: NE555, LM35, LM358, Arduino Uno)",
         kemasan="Bentuk kemasan fisik spesifik (Opsional, contoh: DIP, SOIC, TO-92, TO-220)",
@@ -385,6 +422,9 @@ class DatasheetCog(commands.Cog):
         # Respons selalu ephemeral: hanya terlihat oleh pengguna yang mengetik
         await interaction.response.defer(thinking=True, ephemeral=True)
 
+        # Anti disk penuh: prune PDF cache kadaluarsa/berlebih (dikontrol interval di guards.py)
+        prune_cache()
+
         # -----------------------------------------------------------------
         # KASUS 0: Pilihan Ragam Kemasan Unik
         # -----------------------------------------------------------------
@@ -414,15 +454,15 @@ class DatasheetCog(commands.Cog):
                 color=discord.Color.gold(),
             )
             for pkg_name, item in pkg_map.items():
-                p_no = item.get("part_no", base_query)
-                m_fr = item.get("manufacturer", "Unknown")
+                p_no = _safe_text(item.get("part_no", base_query), 100)
+                m_fr = _safe_text(item.get("manufacturer", "Unknown"), 60)
                 embed.add_field(
-                    name=f"Kemasan: {pkg_name}",
+                    name=f"Kemasan: {_safe_text(pkg_name, 60)}",
                     value=f"• Part: `{p_no}`\n• Pabrikan: {m_fr}",
                     inline=True,
                 )
 
-            view = PackageSelectionView(self.session, base_query, pkg_map)
+            view = PackageSelectionView(self.session, base_query, pkg_map, interaction.user.id)
             await interaction.followup.send(embed=embed, view=view, ephemeral=True)
             return
 
@@ -440,8 +480,9 @@ class DatasheetCog(commands.Cog):
                     text_content = raw_bytes.decode("utf-8")
                 except UnicodeDecodeError:
                     text_content = raw_bytes.decode("latin-1", errors="ignore")
-            except Exception as e:
-                await interaction.followup.send(f"❌ Gagal membaca file lampiran: {e}", ephemeral=True)
+            except Exception:
+                # Tidak borkarkan detail exception (path, stack) ke pengguna
+                await interaction.followup.send("❌ Gagal membaca file lampiran. Pastikan berkas valid dan coba lagi.", ephemeral=True)
                 return
 
             components = [comp_name]
@@ -520,6 +561,18 @@ class DatasheetCog(commands.Cog):
         embed = view.build_embed()
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
+    @datasheet.error
+    async def datasheet_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        """Penanganan error pusat command /datasheet: cooldown + pesan umum (tanpa bocorkan exception)."""
+        if await handle_cooldown(interaction, error):
+            return
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send("❌ Gagal memproses permintaan datasheet. Coba lagi nanti.", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Gagal memproses permintaan datasheet. Coba lagi nanti.", ephemeral=True)
+        except Exception:
+            pass
     @datasheet.autocomplete('komponen')
     async def komponen_autocomplete(
         self,

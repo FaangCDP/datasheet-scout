@@ -157,6 +157,20 @@ def check_sources_health() -> dict:
     return results
 
 
+class OwnerOnlyView(discord.ui.View):
+    """View ephemeral yang hanya dapat diklik oleh pemanggilnya (cegah IDOR tombol)."""
+
+    def __init__(self, user_id: int, timeout: float = 120):
+        super().__init__(timeout=timeout)
+        self.user_id = user_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ Hanya pemilik panel yang dapat memakai menu ini.", ephemeral=True)
+            return False
+        return True
+
+
 class DeleteFileSelect(discord.ui.Select):
     """Dropdown menu untuk memilih file PDF spesifik yang ingin dihapus."""
 
@@ -191,7 +205,8 @@ class DeleteFileSelect(discord.ui.Select):
                     os.remove(target)
                     deleted_count += 1
                 except Exception as e:
-                    await interaction.response.send_message(f"❌ Gagal menghapus {selected_name}: {e}", ephemeral=True)
+                    print(f"[panel ERROR] hapus file: {type(e).__name__}: {e}")
+                    await interaction.response.send_message("❌ Gagal menghapus file tersebut.", ephemeral=True)
                     return
 
         sz_mb = deleted_bytes / (1024 * 1024)
@@ -313,7 +328,7 @@ class OwnerPanelView(discord.ui.View):
             await interaction.response.send_message("📂 Folder `downloads/` saat ini kosong (tidak ada file PDF).", ephemeral=True)
             return
 
-        list_view = discord.ui.View(timeout=120)
+        list_view = OwnerOnlyView(interaction.user.id, timeout=120)
         list_view.add_item(DeleteFileSelect(cache["pdf_files"]))
 
         file_lines = []
@@ -366,7 +381,8 @@ class OwnerPanelView(discord.ui.View):
                 ephemeral=True,
             )
         except Exception as e:
-            await interaction.followup.send(f"❌ Gagal melakukan sinkronisasi: {e}", ephemeral=True)
+            print(f"[panel ERROR] sync commands: {type(e).__name__}: {e}")
+            await interaction.followup.send("❌ Gagal melakukan sinkronisasi perintah.", ephemeral=True)
 
 
 class PanelCog(commands.Cog):

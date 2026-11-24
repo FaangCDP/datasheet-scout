@@ -10,6 +10,8 @@ import os
 import shutil
 import subprocess
 
+from core.pdf_fetch import too_large_to_parse
+
 # Cek ketersediaan pypdfium2 (prioritas utama untuk environment hosting container)
 try:
     import pypdfium2 as pdfium
@@ -34,6 +36,10 @@ def extract_pdf_thumbnail(pdf_path: str, max_width: int = 300) -> str | None:
         None: Jika ekstraksi gagal.
     """
     if not pdf_path or not os.path.isfile(pdf_path):
+        return None
+
+    # Batas ukuran: PDF raksasa tidak dirender in-process (cegah OOM/parser abuse)
+    if too_large_to_parse(pdf_path):
         return None
 
     try:

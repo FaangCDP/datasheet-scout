@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bots.discord import config
+from bots.discord.guards import prune_cache
 
 
 class DatasheetBot(commands.Bot):
@@ -23,6 +24,12 @@ class DatasheetBot(commands.Bot):
         super().__init__(command_prefix=[], intents=intents)
 
     async def setup_hook(self):
+        # Bersihkan cache PDF lama/berlebih saat startup agar disk tidak penuh
+        try:
+            prune_cache()
+        except Exception as e:
+            print(f"[WARN] Prune cache startup gagal: {e}")
+
         # Auto-discover dan muat setiap file cog secara modular (1 file = 1 command)
         cogs_dir = Path(__file__).resolve().parent / "cogs"
         for cog_file in sorted(cogs_dir.glob("*_cog.py")):

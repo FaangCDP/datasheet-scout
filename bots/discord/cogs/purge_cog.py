@@ -60,8 +60,9 @@ class PurgeCog(commands.Cog):
                 ephemeral=True
             )
         except Exception as e:
+            print(f"[purge ERROR] {type(e).__name__}: {e}")
             await interaction.followup.send(
-                f"❌ Terjadi kesalahan saat menghapus pesan: {e}",
+                "❌ Terjadi kesalahan saat menghapus pesan. Coba lagi nanti.",
                 ephemeral=True
             )
 

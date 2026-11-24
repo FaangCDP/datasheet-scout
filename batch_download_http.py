@@ -16,6 +16,9 @@ import sys
 import time
 import argparse
 
+# Batas total ukuran folder output (MB). Mencegah disk VPS penuh saat batch besar.
+MAX_TOTAL_MB = int(os.getenv("MAX_TOTAL_MB", "5000"))
+
 # Import fungsi dari core scraper
 from core.scraper import (
     BASE_URL,
@@ -113,6 +116,18 @@ def read_component_file(file_path: str) -> list[str]:
 # FUNGSI SEARCH & DOWNLOAD PER KOMPONEN
 # ================================================================
 
+def folder_size_mb(path: str) -> float:
+    """Total ukuran folder (rekursif) dalam MB."""
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError:
+                pass
+    return total / (1024 * 1024)
+
+
 def search_and_download(session, component_name: str, count: int, download_folder: str) -> dict:
     """
     Cari komponen dan download datasheet via HTTP session bersama.
@@ -150,6 +165,12 @@ def search_and_download(session, component_name: str, count: int, download_folde
 
     # --- Download loop ---
     for i, res in enumerate(results, 1):
+        # Kuota disk: hentikan unduhan bila folder sudah melewati batas
+        if folder_size_mb(download_folder) >= MAX_TOTAL_MB:
+            print(f"    [!] Kuota folder {MAX_TOTAL_MB} MB terlampaui, unduhan dihentikan.")
+            result_summary["skipped_reason"] = f"Kuota {MAX_TOTAL_MB} MB terlampaui"
+            break
+
         # Skip existing: cek apakah file sudah ada di folder tujuan
         filename = sanitize_filename(res["part_no"], res["manufacturer"])
         expected_file = os.path.join(download_folder, filename)
