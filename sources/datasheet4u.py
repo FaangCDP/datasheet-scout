@@ -17,6 +17,14 @@ from core import pdf_fetch
 NAME = "datasheet4u"
 BASE_URL = "https://www.datasheet4u.com"
 
+def _https_urljoin(base: str, href: str) -> str:
+    """urljoin lalu upgrade http:// ke https:// (R-02)."""
+    joined = urllib.parse.urljoin(base, href)
+    if joined.startswith("http://"):
+        joined = "https://" + joined[len("http://"):]
+    return joined
+
+
 # Hanya URL https ke domain ini (atau subdomainnya) yang boleh di-request.
 ALLOWED_HOSTS = ("datasheet4u.com",)
 
@@ -109,7 +117,7 @@ def search_component(session: requests.Session, component_name: str, needed: int
 
         tds = row.select("td")
         description = tds[-1].get_text(strip=True) if len(tds) >= 3 else ""
-        full_url = urllib.parse.urljoin(BASE_URL, href)
+        full_url = _https_urljoin(BASE_URL, href)
         if not is_allowed_url(full_url):
             print(f"[{NAME} WARNING] Tautan hasil pencarian ditolak (host di luar allowlist).")
             continue
@@ -170,7 +178,7 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
     if not download_href:
         return None
 
-    download_url = urllib.parse.urljoin(BASE_URL, download_href)
+    download_url = _https_urljoin(BASE_URL, download_href)
     if not is_allowed_url(download_url):
         print(f"[{NAME} ERROR] URL unduhan ditolak (host di luar allowlist).")
         return None
@@ -186,7 +194,7 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
             if not location:
                 resp.close()
                 break
-            next_url = urllib.parse.urljoin(download_url, location)
+            next_url = _https_urljoin(download_url, location)
             resp.close()
             if not is_allowed_url(next_url):
                 print(f"[{NAME} ERROR] Redirect ke host luar allowlist, dihentikan.")
@@ -222,7 +230,7 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
     if not pdf_href:
         return None
 
-    pdf_url = urllib.parse.urljoin(BASE_URL, pdf_href)
+    pdf_url = _https_urljoin(BASE_URL, pdf_href)
     if not is_allowed_url(pdf_url):
         print(f"[{NAME} ERROR] URL PDF ditolak (host di luar allowlist).")
         return None
@@ -241,7 +249,7 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
             if not location:
                 resp.close()
                 break
-            next_url = urllib.parse.urljoin(pdf_url, location)
+            next_url = _https_urljoin(pdf_url, location)
             resp.close()
             if not is_allowed_url(next_url):
                 print(f"[{NAME} ERROR] Redirect ke host luar allowlist, dihentikan.")

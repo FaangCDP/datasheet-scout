@@ -84,7 +84,7 @@ def search_component(session=None, component_name: str = "", needed: int = 15) -
     """
     Cari komponen dengan mekanisme Relevance Ranking & Fallback Cerdas:
     1. Cari di datasheet4u.com dan ukur relevansi part number.
-    2. Jika hasil d4u tidak memiliki exact/near-match (skor < 85), gabungkan atau fallback ke alldatasheet.com.
+    2. Jika hasil d4u tidak memiliki exact/near-match (skor < 90) atau kurang dari kuota `needed`, fallback ke alldatasheet.com.
     3. Gabungkan dan urutkan hasil akhir berdasarkan skor relevansi tertinggi ke terendah.
     """
     comp_name = component_name.strip()
@@ -108,11 +108,38 @@ def search_component(session=None, component_name: str = "", needed: int = 15) -
     # Cek apakah ada exact match (skor 100) di hasil d4u
     has_exact_d4u = any(compute_relevance(r, comp_name) == 100.0 for r in d4u_results)
 
-    # Jika d4u TIDAK memiliki exact match (100) atau hasilnya kurang dari jumlah yang diminta,
-    # hubungi alldatasheet.com untuk mengambil komponen exact match
+    # Evaluasi fallback:
+    # - Jika d4u punya exact match (100) → jangan fallback (sudah pas)
+    # - Jika d4u punya hasil tapi skor max < 90 → fallback untuk lengkapi
+    # - Jika d4u hasilnya < needed → fallback untuk isi kuota
+    # - Tampilkan alasan & jumlah d4u ditemukan
+    d4u_best_score = max(compute_relevance(r, comp_name) for r in d4u_results) if d4u_results else 0.0
+    d4u_enough = len(d4u_results) >= needed
+    d4u_high_relevance = d4u_best_score >= 90.0
+
+    if has_exact_d4u:
+        # Sudah punya exact match → tampilkan semua d4u, skip alldatasheet
+        print(f"[AUTO-FALLBACK] '{comp_name}' — d4u punya exact match 100, "
+              f"total ditemukan {len(d4u_results)} komponen, langsung pakai d4u tanpa fallback")
+        should_fallback = False
+    elif d4u_enough and d4u_high_relevance:
+        # Sudah cukup banyak dan relevansi tinggi → tampilkan d4u, skip alldatasheet
+        print(f"[AUTO-FALLBACK] '{comp_name}' — d4u ditemukan {len(d4u_results)} "
+              f"(nilai tertinggi {d4u_best_score:.0f} >= 90), cukup tanpa fallback")
+        should_fallback = False
+    elif not d4u_enough:
+        # Kurang dari needed → fallback
+        print(f"[AUTO-FALLBACK] '{comp_name}' — d4u hanya ditemukan {len(d4u_results)} "
+              f"(butuh {needed}), fallback ke alldatasheet.com...")
+        should_fallback = True
+    else:
+        # d4u ada tapi skor < 90 dan enough but low relevance → fallback detail
+        print(f"[AUTO-FALLBACK] '{comp_name}' — d4u ditemukan {len(d4u_results)} "
+              f"(nilai tertinggi {d4u_best_score:.0f} < 90), fallback untuk evaluasi tambahan")
+        should_fallback = True
+
     all_results = []
-    if not has_exact_d4u or len(d4u_results) < needed:
-        print(f"[AUTO-FALLBACK] '{comp_name}' (d4u tidak ada exact match 100), mencari di alldatasheet.com...")
+    if should_fallback:
         try:
             s2 = alldatasheet.create_session()
             all_hits = alldatasheet.search_component(s2, comp_name, needed=pool_size)

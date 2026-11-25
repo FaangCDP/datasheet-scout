@@ -50,6 +50,21 @@ def test_allow_reject():
         assert not datasheet4u.is_allowed_url(u), f"lolos: {u!r}"
 
 
+def test_d4u_https_urljoin_upgrades_and_allows():
+    """_https_urljoin meng-upgrade http:// -> https:// sehingga lolos is_allowed_url."""
+    joined = datasheet4u._https_urljoin(
+        "https://www.datasheet4u.com/", "http://www.datasheet4u.com/datasheet-pdf/NE555.pdf"
+    )
+    assert joined.startswith("https://"), joined
+    assert joined == "https://www.datasheet4u.com/datasheet-pdf/NE555.pdf"
+    assert datasheet4u.is_allowed_url(joined)
+
+    # href relatif tetap di-resolve tanpa mengubah skema base https
+    rel = datasheet4u._https_urljoin("https://www.datasheet4u.com/a/b/", "../c.pdf")
+    assert rel == "https://www.datasheet4u.com/a/c.pdf", rel
+    assert datasheet4u.is_allowed_url(rel)
+
+
 # ──────────────────────────────────────────────
 # H-02: cap ukuran
 # ──────────────────────────────────────────────
