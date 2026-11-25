@@ -43,20 +43,42 @@ def extract_key_specs(pdf_path: str, max_pages: int = 3) -> dict[str, str]:
 
     # METODE 1: pypdfium2 (Ekstraksi teks Python mandiri)
     if HAS_PYPDFIUM and os.path.isfile(pdf_path):
+        pdf = None
         try:
             pdf = pdfium.PdfDocument(pdf_path)
             total = len(pdf)
             scan_limit = min(total, max_pages)
             text_chunks = []
             for i in range(scan_limit):
+                page = None
+                tp = None
                 try:
-                    tp = pdf[i].get_textpage()
+                    page = pdf[i]
+                    tp = page.get_textpage()
                     text_chunks.append(tp.get_text_range())
                 except Exception:
                     continue
+                finally:
+                    # S-06: tutup objek native PDFium agar tidak bocor memori/fd
+                    if tp is not None:
+                        try:
+                            tp.close()
+                        except Exception:
+                            pass
+                    if page is not None:
+                        try:
+                            page.close()
+                        except Exception:
+                            pass
             text = "\n".join(text_chunks)
         except Exception as e:
             print(f"[specs_extractor WARNING] PDFium teks gagal, mencoba pdftotext: {e}")
+        finally:
+            if pdf is not None:
+                try:
+                    pdf.close()
+                except Exception:
+                    pass
 
     # METODE 2: pdftotext (Fallback jika poppler tersedia)
     if not text and PDFTOTEXT_BIN:

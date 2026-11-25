@@ -55,6 +55,9 @@ def extract_pdf_thumbnail(pdf_path: str, max_width: int = 300) -> str | None:
 
         # METODE 1: pypdfium2 (Python engine mandiri)
         if HAS_PYPDFIUM:
+            pdf = None
+            page = None
+            pil_image = None
             try:
                 pdf = pdfium.PdfDocument(pdf_path)
                 if len(pdf) > 0:
@@ -68,6 +71,23 @@ def extract_pdf_thumbnail(pdf_path: str, max_width: int = 300) -> str | None:
                         return output_png
             except Exception as e:
                 print(f"[preview_extractor WARNING] PDFium render gagal, mencoba pdftoppm: {e}")
+            finally:
+                # S-06: tutup objek PDFium dan PIL agar tidak bocor memori/fd
+                if pil_image is not None:
+                    try:
+                        pil_image.close()
+                    except Exception:
+                        pass
+                if page is not None:
+                    try:
+                        page.close()
+                    except Exception:
+                        pass
+                if pdf is not None:
+                    try:
+                        pdf.close()
+                    except Exception:
+                        pass
 
         # METODE 2: pdftoppm (Fallback Linux CLI)
         if PDFTOPPM_BIN:

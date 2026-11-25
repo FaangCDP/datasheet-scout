@@ -94,7 +94,8 @@ class TestSpecsExtractor(unittest.TestCase):
         mock_res.stdout = mock_output
         mock_subproc.return_value = mock_res
 
-        with patch("os.path.isfile", return_value=True):
+        with patch("os.path.isfile", return_value=True), \
+         patch("core.specs_extractor.too_large_to_parse", return_value=False):
             specs = extract_key_specs("/fake/path.pdf")
 
         self.assertEqual(specs.get("Tegangan Kerja"), "3V to 36V")
@@ -108,7 +109,8 @@ class TestSpecsExtractor(unittest.TestCase):
         mock_res.stdout = "No technical information here."
         mock_subproc.return_value = mock_res
 
-        with patch("os.path.isfile", return_value=True):
+        with patch("os.path.isfile", return_value=True), \
+         patch("core.specs_extractor.too_large_to_parse", return_value=False):
             specs = extract_key_specs("/fake/path.pdf")
 
         self.assertEqual(specs, {})

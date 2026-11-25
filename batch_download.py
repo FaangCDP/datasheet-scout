@@ -80,10 +80,10 @@ def manual_batch_download(components: list[str], count_per_component: int = 1, o
             print(f"    [+] Ditemukan {len(results)} hasil, mulai unduh...")
 
             for i, res in enumerate(results, 1):
-                # Kuota disk: hentikan unduhan bila output_folder melewati MAX_TOTAL_MB
+                # Kuota disk: hentikan seluruh batch bila output_folder melewati MAX_TOTAL_MB
                 if folder_size_mb(output_folder) >= MAX_TOTAL_MB:
-                    print(f"    [!] Kuota folder {MAX_TOTAL_MB} MB terlampaui, unduhan dihentikan.")
-                    break
+                    print(f"    [!] Kuota folder {MAX_TOTAL_MB} MB terlampaui, seluruh batch dihentikan.")
+                    return
 
                 filename = sanitize_filename(res["part_no"], res["manufacturer"])
                 expected_file = os.path.join(output_folder, filename)

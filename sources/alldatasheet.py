@@ -18,6 +18,13 @@ from core import pdf_fetch
 NAME = "alldatasheet"
 BASE_URL = "https://www.alldatasheet.com"
 
+def _https_urljoin(base: str, href: str) -> str:
+    """urljoin lalu upgrade http:// ke https:// (R-02)."""
+    joined = urllib.parse.urljoin(base, href)
+    if joined.startswith("http://"):
+        joined = "https://" + joined[len("http://"):]
+    return joined
+
 # Hanya URL https ke domain ini (atau subdomainnya) yang boleh di-request.
 ALLOWED_HOSTS = ("alldatasheet.com",)
 
@@ -142,10 +149,19 @@ def search_component(session: requests.Session, component_name: str, needed: int
                         print(f"[{NAME} INFO] Direct IP sudah diuji, menghentikan pencarian.")
                     break  # keluar dari loop
             elif resp.status_code in (429, 500, 502, 503):
-                # Backoff singkat dan rotasi proxy
-                time.sleep(2)
-                # Lanjut ke attempt berikutnya (proxy rotasi)
-                continue
+                print(f"[{NAME} WARNING] HTTP {resp.status_code}, mencoba proxy berikutnya...")
+                if current_proxy:
+                    pm.mark_proxy_dead(current_proxy)
+                next_proxy = pm.get_working_proxy(force_refresh=True)
+                if next_proxy:
+                    session = requests.Session(impersonate="safari17_0")
+                    session.proxies = {"http": next_proxy, "https": next_proxy}
+                    print(f"[{NAME} INFO] Berganti ke proxy baru: {next_proxy.split('@')[-1] if '@' in next_proxy else next_proxy}")
+                    time.sleep(1)
+                    continue
+                # Proxy habis, hentikan secara bersih
+                print(f"[{NAME} INFO] Semua proxy habis/stop, menghentikan pencarian.")
+                break
             else:
                 # Status code lain, hentikan upaya ini
                 print(f"[{NAME} ERROR] HTTP status tidak diharapkan: {resp.status_code}")
@@ -206,7 +222,7 @@ def search_component(session: requests.Session, component_name: str, needed: int
                     description = txt
                     break
 
-        full_url = urllib.parse.urljoin(BASE_URL, href)
+        full_url = _https_urljoin(BASE_URL, href)
         if not is_allowed_url(full_url):
             print(f"[{NAME} WARNING] Tautan hasil pencarian ditolak (host di luar allowlist).")
             continue
@@ -357,3 +373,6 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
         # S-01: pastikan koneksi stream selalu ditutup
         if r_pdf is not None:
             r_pdf.close()
+
+# Alias historis untuk test otomatis
+search_alldatasheet = search_component

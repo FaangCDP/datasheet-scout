@@ -39,22 +39,44 @@ def find_pinout_page(pdf_path: str, max_pages: int = 15) -> int:
 
     # METODE 1: pypdfium2 (Cari kata kunci teks langsung dari Python)
     if HAS_PYPDFIUM and os.path.isfile(pdf_path):
+        pdf = None
         try:
             pdf = pdfium.PdfDocument(pdf_path)
             total = len(pdf)
             scan_limit = min(total, max_pages)
             for page_idx in range(scan_limit):
+                page = None
+                text_page = None
                 try:
-                    text_page = pdf[page_idx].get_textpage()
+                    page = pdf[page_idx]
+                    text_page = page.get_textpage()
                     txt = text_page.get_text_range()
                     for kw in PIN_KEYWORDS:
                         if re.search(kw, txt, re.I):
                             return page_idx + 1  # 1-indexed
                 except Exception:
                     continue
+                finally:
+                    # S-06: tutup objek native PDFium agar tidak bocor memori/fd
+                    if text_page is not None:
+                        try:
+                            text_page.close()
+                        except Exception:
+                            pass
+                    if page is not None:
+                        try:
+                            page.close()
+                        except Exception:
+                            pass
             return 1
         except Exception:
             pass
+        finally:
+            if pdf is not None:
+                try:
+                    pdf.close()
+                except Exception:
+                    pass
 
     # METODE 2: pdftotext (Fallback jika poppler tersedia)
     if PDFTOTEXT_BIN:

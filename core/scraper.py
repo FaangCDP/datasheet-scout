@@ -151,11 +151,13 @@ def download_single(session=None, result: dict = None, index: int = 1, download_
 
     source = result.get("source", "datasheet4u")
     if source == "alldatasheet":
-        s = alldatasheet.create_session()
+        s = session or alldatasheet.create_session()
         return alldatasheet.download_single(s, result, index=index, download_folder=download_folder)
-    else:
-        s = session if session else datasheet4u.create_session()
+    elif source == "datasheet4u":
+        s = session or datasheet4u.create_session()
         return datasheet4u.download_single(s, result, index=index, download_folder=download_folder)
+    else:
+        raise ValueError(f"Unsupported source: {source!r}")
 
 
 def search_all_sources(component_name: str, needed: int = 3) -> list[dict]:

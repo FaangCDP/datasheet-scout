@@ -186,6 +186,7 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
             if not location:
                 break
             next_url = urllib.parse.urljoin(download_url, location)
+            resp.close()
             if not is_allowed_url(next_url):
                 print(f"[{NAME} ERROR] Redirect ke host luar allowlist, dihentikan.")
                 return None
@@ -239,6 +240,7 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
             if not location:
                 break
             next_url = urllib.parse.urljoin(pdf_url, location)
+            resp.close()
             if not is_allowed_url(next_url):
                 print(f"[{NAME} ERROR] Redirect ke host luar allowlist, dihentikan.")
                 return None
@@ -280,7 +282,8 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
         with open(file_path, "rb") as f:
             f.seek(max(0, file_sz - 1024))
             tail = f.read()
-        if b"%%EOF" not in tail:
+            has_eof = b"%%EOF" in tail
+        if not has_eof:
             print(f"[{NAME} ERROR] Penanda %%EOF tidak ditemukan (PDF terpotong), file dihapus.")
             try:
                 os.remove(file_path)
