@@ -8,8 +8,10 @@ Batas diatur via ENV: MAX_PDF_SIZE_MB (unduhan, default 30), MAX_PARSE_SIZE_MB (
 
 import os
 
-MAX_PDF_BYTES = int(os.getenv("MAX_PDF_SIZE_MB", "30")) * 1024 * 1024
-MAX_PARSE_BYTES = int(os.getenv("MAX_PARSE_SIZE_MB", "40")) * 1024 * 1024
+from core.env_utils import parse_int_env
+
+MAX_PDF_BYTES = parse_int_env("MAX_PDF_SIZE_MB", 30, min_value=1) * 1024 * 1024
+MAX_PARSE_BYTES = parse_int_env("MAX_PARSE_SIZE_MB", 40, min_value=1) * 1024 * 1024
 MIN_PDF_BYTES = 2048
 
 

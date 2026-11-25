@@ -18,6 +18,21 @@ from core.scraper import (
     sanitize_filename,
 )
 
+from core.env_utils import parse_int_env
+
+MAX_TOTAL_MB = parse_int_env("MAX_TOTAL_MB", 5000, min_value=1)
+
+
+def folder_size_mb(path: str) -> float:
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError:
+                pass
+    return total / (1024 * 1024)
+
 
 def manual_batch_download(components: list[str], count_per_component: int = 1, output_folder: str = "downloads"):
     """Download datasheet untuk daftar komponen hasil input manual user."""
@@ -65,6 +80,11 @@ def manual_batch_download(components: list[str], count_per_component: int = 1, o
             print(f"    [+] Ditemukan {len(results)} hasil, mulai unduh...")
 
             for i, res in enumerate(results, 1):
+                # Kuota disk: hentikan unduhan bila output_folder melewati MAX_TOTAL_MB
+                if folder_size_mb(output_folder) >= MAX_TOTAL_MB:
+                    print(f"    [!] Kuota folder {MAX_TOTAL_MB} MB terlampaui, unduhan dihentikan.")
+                    break
+
                 filename = sanitize_filename(res["part_no"], res["manufacturer"])
                 expected_file = os.path.join(output_folder, filename)
 

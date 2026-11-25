@@ -10,13 +10,15 @@ Kuota diatur via ENV: MAX_CACHE_MB (default 500), MAX_CACHE_AGE_HOURS (default 7
 import os
 import time
 
+from core.env_utils import parse_int_env
+
 import discord
 from discord import app_commands
 
 from bots.discord import config
 
-MAX_CACHE_MB = int(os.getenv("MAX_CACHE_MB", "500"))
-MAX_CACHE_AGE_HOURS = int(os.getenv("MAX_CACHE_AGE_HOURS", "72"))
+MAX_CACHE_MB = parse_int_env("MAX_CACHE_MB", 500, min_value=1)
+MAX_CACHE_AGE_HOURS = parse_int_env("MAX_CACHE_AGE_HOURS", 72, min_value=1)
 PRUNE_MIN_INTERVAL_S = 300   # jangan pindai disk pada setiap request
 FRESH_FILE_GRACE_S = 600     # berkas yang baru dibuat tidak ikut dibuang oleh kuota
 

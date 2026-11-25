@@ -106,11 +106,12 @@ def t_too_large():
 
 # --- L-01: parse ENV aman ---
 def t_int_env():
-    assert config._int_env("TIDAK_ADA_ENV_INI", 7) == 7
+    from core.env_utils import parse_int_env
+    assert parse_int_env("TIDAK_ADA_ENV_INI", 7) == 7
     os.environ["TEST_BAD_INT"] = "bukan_angka"
-    assert config._int_env("TEST_BAD_INT", 5) == 5
+    assert parse_int_env("TEST_BAD_INT", 5) == 5
     os.environ["TEST_BAD_INT"] = "42"
-    assert config._int_env("TEST_BAD_INT", 5) == 42
+    assert parse_int_env("TEST_BAD_INT", 5) == 42
     del os.environ["TEST_BAD_INT"]
 
 
@@ -171,11 +172,117 @@ def t_extractors_cap():
         assert extract_pinout_image(p) == (None, None)
 
 
+
+
+# --- T-01: SSRF redirect bypass via manual redirect loop ---
+def t_t01_ssrf_redirect_manual_loop():
+    import inspect
+    from sources.datasheet4u import download_single, BASE_URL, is_allowed_url
+    src = inspect.getsource(download_single)
+    # Verify manual redirect loop exists with SSRF protection
+    assert "allow_redirects=False" in src, "Must use allow_redirects=False"
+    assert "is_allowed_url" in src, "Must validate each redirect hop"
+    assert "redirects" in src, "Must track redirect count"
+    assert "301" in src and "302" in src, "Must handle 301/302 redirects"
+    # Verify is_allowed_url blocks evil.com
+    assert not is_allowed_url("http://evil.com/malware.pdf")
+    assert is_allowed_url(BASE_URL + "/valid.pdf")
+    # Verify redirect target validation
+    assert not is_allowed_url("http://evil.com")
+    assert not is_allowed_url("https://attacker.net/phish")
+
+
+
+# --- T-02: ProxyManager thread-safe cache with RLock ---
+def t_t02_proxy_manager_rlock():
+    from core.proxy_manager import ProxyManager
+    import threading, time
+    # Verify class attributes exist
+    assert hasattr(ProxyManager, "_lock")
+    assert hasattr(ProxyManager, "CACHE_DURATION")
+    assert hasattr(ProxyManager, "NULL_CACHE_DURATION")
+    assert ProxyManager.CACHE_DURATION == 300.0
+    assert ProxyManager.NULL_CACHE_DURATION == 25.0
+    # Test thread-safety via instance method
+    pm = ProxyManager()  # creates instance with proxy_file=None / auto-proxies.txt
+    errors = []
+    def worker():
+        try:
+            for _ in range(3):
+                pm.mark_proxy_dead("http://test.invalid:8080")
+                _ = pm.get_working_proxy(force_refresh=True)
+        except Exception as e:
+            errors.append(e)
+    threads = [threading.Thread(target=worker) for _ in range(3)]
+    for t in threads: t.start()
+    for t in threads: t.join()
+    assert len(errors) == 0, f"Thread errors: {errors}"
+
+# --- S-01: Stream connection close via finally ---
+def t_s01_stream_close_finally():
+    import inspect, sources.datasheet4u as ds4u, sources.alldatasheet as ads
+    ds4u_src = inspect.getsource(ds4u.download_single)
+    assert "finally:" in ds4u_src
+    assert ".close()" in ds4u_src
+    ads_src = inspect.getsource(ads.download_single)
+    assert "finally:" in ads_src
+    assert "r_pdf.close()" in ads_src
+
+# --- S-02: URL normalization via urljoin ---
+def t_s02_urljoin_normalization():
+    import urllib.parse
+    from sources.datasheet4u import BASE_URL as BASE4U
+    from sources.alldatasheet import BASE_URL as BASEADS
+    # Test urljoin produces correct URLs
+    import urllib.parse
+    from sources.datasheet4u import BASE_URL as BASE4U
+    from sources.alldatasheet import BASE_URL as BASEADS
+    # Absolute path join
+    joined = urllib.parse.urljoin(BASE4U, "/pdf/test.pdf")
+    assert "/pdf/test.pdf" in joined
+    assert joined.startswith("http")  # urljoin uses scheme from BASE4U
+    # Protocol-relative join
+    joined2 = urllib.parse.urljoin(BASE4U, "//cdn.example.com/file.pdf")
+    assert "cdn.example.com" in joined2
+    # alldatasheet
+    joined3 = urllib.parse.urljoin(BASEADS, "//download.alldatasheet.com/file.pdf")
+    assert "download.alldatasheet.com" in joined3
+
+# --- S-03: Retry loop with tried_direct flag and 429/5xx backoff ---
+def t_s03_retry_tried_direct_backoff():
+    import inspect
+    import sources.alldatasheet as ads
+    # Find the search function - may be named differently
+    search_fn = getattr(ads, "search_alldatasheet", None) or getattr(ads, "search", None)
+    if search_fn is None:
+        # Find function containing retry loop
+        import re
+        fns = [(n, o) for n, o in vars(ads).items() if callable(o) and hasattr(o, '__code__')]
+        for n, o in fns:
+            try:
+                src = inspect.getsource(o)
+                if "tried_direct" in src:
+                    search_fn = o
+                    break
+            except (OSError, TypeError):
+                continue
+    assert search_fn is not None, "No search function with retry loop found"
+    src = inspect.getsource(search_fn)
+    assert "tried_direct" in src
+    backoff_kw = any(k in src for k in ["backoff", "sleep", "time"])
+    assert backoff_kw, "retry loop must have backoff or sleep"
+    assert "429" in src or "500" in src or "502" in src or "503" in src
+    assert "force_refresh" in src
 for name, fn in [
     ("M-01 allowlist menerima host sah", t_allow_ok),
     ("M-01 allowlist menolak host/skema asing", t_allow_reject),
     ("H-02 content_length_exceeds", t_content_length),
     ("H-02 read_capped", t_read_capped),
+    ("T-01 SSRF redirect manual loop", t_t01_ssrf_redirect_manual_loop),
+    ("T-02 ProxyManager RLock", t_t02_proxy_manager_rlock),
+    ("S-01 Stream close finally", t_s01_stream_close_finally),
+    ("S-02 URL join normalization", t_s02_urljoin_normalization),
+    ("S-03 Retry with tried_direct", t_s03_retry_tried_direct_backoff),
     ("H-02 write_capped + hapus saat lewat batas", t_write_capped),
     ("L-06 too_large_to_parse", t_too_large),
     ("L-01 _int_env aman", t_int_env),

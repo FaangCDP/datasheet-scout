@@ -109,7 +109,7 @@ def search_component(session: requests.Session, component_name: str, needed: int
 
         tds = row.select("td")
         description = tds[-1].get_text(strip=True) if len(tds) >= 3 else ""
-        full_url = f"{BASE_URL}{href}" if href.startswith("/") else href
+        full_url = urllib.parse.urljoin(BASE_URL, href)
         if not is_allowed_url(full_url):
             print(f"[{NAME} WARNING] Tautan hasil pencarian ditolak (host di luar allowlist).")
             continue
@@ -170,7 +170,7 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
     if not download_href:
         return None
 
-    download_url = f"{BASE_URL}{download_href}" if download_href.startswith("/") else download_href
+    download_url = urllib.parse.urljoin(BASE_URL, download_href)
     if not is_allowed_url(download_url):
         print(f"[{NAME} ERROR] URL unduhan ditolak (host di luar allowlist).")
         return None
@@ -178,7 +178,20 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
 
     # 2. Halaman unduh
     try:
-        resp = session.get(download_url, timeout=30)
+        resp = session.get(download_url, timeout=30, allow_redirects=False)
+        # Handle redirects manual untuk cegah SSRF bypass via redirect
+        redirects = 0
+        while resp.status_code in (301, 302, 303, 307, 308) and redirects < 5:
+            location = resp.headers.get("Location")
+            if not location:
+                break
+            next_url = urllib.parse.urljoin(download_url, location)
+            if not is_allowed_url(next_url):
+                print(f"[{NAME} ERROR] Redirect ke host luar allowlist, dihentikan.")
+                return None
+            resp = session.get(next_url, timeout=30, allow_redirects=False)
+            download_url = next_url
+            redirects += 1
         if resp.status_code != 200:
             return None
     except requests.RequestException:
@@ -207,15 +220,32 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
     if not pdf_href:
         return None
 
-    pdf_url = f"{BASE_URL}{pdf_href}" if pdf_href.startswith("/") else pdf_href
+    pdf_url = urllib.parse.urljoin(BASE_URL, pdf_href)
     if not is_allowed_url(pdf_url):
         print(f"[{NAME} ERROR] URL PDF ditolak (host di luar allowlist).")
         return None
     human_delay(0.8, 1.8)
 
     # 3. Stream & validasi berkas PDF (batas ukuran untuk mencegah penuhnya disk)
+    # Redirect manual + tutup koneksi stream selalu (S-01, T-01)
+    resp = None
     try:
-        resp = session.get(pdf_url, headers={"Referer": download_url}, timeout=120, stream=True)
+        resp = session.get(pdf_url, headers={"Referer": download_url}, timeout=120,
+                            stream=True, allow_redirects=False)
+        # Redirect ke host di luar allowlist harus ditolak (T-01)
+        redirects = 0
+        while resp.status_code in (301, 302, 303, 307, 308) and redirects < 5:
+            location = resp.headers.get("Location")
+            if not location:
+                break
+            next_url = urllib.parse.urljoin(pdf_url, location)
+            if not is_allowed_url(next_url):
+                print(f"[{NAME} ERROR] Redirect ke host luar allowlist, dihentikan.")
+                return None
+            resp = session.get(next_url, headers={"Referer": download_url}, timeout=120,
+                                stream=True, allow_redirects=False)
+            pdf_url = next_url
+            redirects += 1
         if resp.status_code != 200:
             return None
 
@@ -251,10 +281,19 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
             f.seek(max(0, file_sz - 1024))
             tail = f.read()
         if b"%%EOF" not in tail:
-            print(f"[{NAME} WARNING] Penanda %%EOF tidak ditemukan di akhir berkas (berkas mungkin terpotong).")
+            print(f"[{NAME} ERROR] Penanda %%EOF tidak ditemukan (PDF terpotong), file dihapus.")
+            try:
+                os.remove(file_path)
+            except OSError:
+                pass
+            return None
 
         return file_path
 
     except (requests.RequestException, IOError) as e:
         print(f"[{NAME} ERROR] Gagal menyimpan PDF: {e}")
         return None
+    finally:
+        # S-01: pastikan koneksi stream selalu ditutup
+        if resp is not None:
+            resp.close()

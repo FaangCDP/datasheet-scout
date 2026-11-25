@@ -16,8 +16,10 @@ import sys
 import time
 import argparse
 
+from core.env_utils import parse_int_env
+
 # Batas total ukuran folder output (MB). Mencegah disk VPS penuh saat batch besar.
-MAX_TOTAL_MB = int(os.getenv("MAX_TOTAL_MB", "5000"))
+MAX_TOTAL_MB = parse_int_env("MAX_TOTAL_MB", 5000, min_value=1)
 
 # Import fungsi dari core scraper
 from core.scraper import (

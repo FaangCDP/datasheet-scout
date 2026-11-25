@@ -105,6 +105,7 @@ def search_component(session: requests.Session, component_name: str, needed: int
 
     max_proxy_attempts = max(len(pm.proxies), 1) + 1  # Coba seluruh proxy + direct IP
     resp = None
+    tried_direct = False
 
     for attempt in range(max_proxy_attempts):
         current_proxy = session.proxies.get("http") if getattr(session, "proxies", None) else None
@@ -117,7 +118,6 @@ def search_component(session: requests.Session, component_name: str, needed: int
                 print(f"[{NAME} WARNING] Proxy terkena flag HTTP 403. Merotasi ke proxy berikutnya...")
                 if current_proxy:
                     pm.mark_proxy_dead(current_proxy)
-
                 # Ambil proxy berikutnya dari pool
                 next_proxy = pm.get_working_proxy(force_refresh=True)
                 if next_proxy:
@@ -125,10 +125,31 @@ def search_component(session: requests.Session, component_name: str, needed: int
                     session.proxies = {"http": next_proxy, "https": next_proxy}
                     print(f"[{NAME} INFO] Berganti ke proxy baru: {next_proxy.split('@')[-1] if '@' in next_proxy else next_proxy}")
                 else:
-                    # Seluruh proxy sudah habis atau mati, fallback ke direct IP
-                    print(f"[{NAME} INFO] Seluruh proxy pada daftar telah dicoba/mati. Mencoba koneksi Direct IP...")
-                    session = requests.Session(impersonate="safari17_0")
-                    # Lanjut loop sekali lagi untuk direct IP
+                    # Seluruh proxy sudah habis atau mati, fallback ke direct IP (hanya sekali)
+                    if not tried_direct:
+                        tried_direct = True
+                        print(f"[{NAME} INFO] Seluruh proxy mati, mencoba koneksi Direct IP...")
+                        session = requests.Session(impersonate="safari17_0")
+                        try:
+                            resp = session.get(search_url, headers=search_headers, timeout=20)
+                            if resp.status_code == 200:
+                                break
+                            else:
+                                print(f"[{NAME} ERROR] Direct IP juga gagal (status {resp.status_code})")
+                        except Exception as e:
+                            print(f"[{NAME} WARNING] Request direct error: {e}")
+                    else:
+                        print(f"[{NAME} INFO] Direct IP sudah diuji, menghentikan pencarian.")
+                    break  # keluar dari loop
+            elif resp.status_code in (429, 500, 502, 503):
+                # Backoff singkat dan rotasi proxy
+                time.sleep(2)
+                # Lanjut ke attempt berikutnya (proxy rotasi)
+                continue
+            else:
+                # Status code lain, hentikan upaya ini
+                print(f"[{NAME} ERROR] HTTP status tidak diharapkan: {resp.status_code}")
+                break
         except Exception as e:
             print(f"[{NAME} WARNING] Request gagal pada attempt {attempt + 1}: {e}")
             if current_proxy:
@@ -138,7 +159,15 @@ def search_component(session: requests.Session, component_name: str, needed: int
                 session = requests.Session(impersonate="safari17_0")
                 session.proxies = {"http": next_proxy, "https": next_proxy}
             else:
-                session = requests.Session(impersonate="safari17_0")
+                # Tidak ada proxy lagi, coba direct IP sekali saja
+                if not tried_direct:
+                    tried_direct = True
+                    print(f"[{NAME} INFO] Semua proxy gagal, mencoba koneksi Direct IP...")
+                    try:
+                        resp = session.get(search_url, headers=search_headers, timeout=20)
+                    except Exception as e2:
+                        print(f"[{NAME} WARNING] Request direct error: {e2}")
+                break
 
     if resp is None or resp.status_code != 200:
         status = resp.status_code if resp else "No Response"
@@ -177,7 +206,7 @@ def search_component(session: requests.Session, component_name: str, needed: int
                     description = txt
                     break
 
-        full_url = "https:" + href if href.startswith("//") else href
+        full_url = urllib.parse.urljoin(BASE_URL, href)
         if not is_allowed_url(full_url):
             print(f"[{NAME} WARNING] Tautan hasil pencarian ditolak (host di luar allowlist).")
             continue
@@ -278,7 +307,9 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
 
     human_delay(0.8, 1.8)
 
-    # 3. Unduh berkas PDF aktual dengan Referer viewer iframe (stream + batas ukuran)
+    # 3. Unduh berkas PDF aktual dengan Referer viewer iframe (stream + batas ukuran + S-01)
+    # S-01: tutup koneksi stream selalu (finally)
+    r_pdf = None
     try:
         r_pdf = session.get(pdf_url, headers={"Referer": raw_viewer_url}, timeout=60, stream=True)
         if r_pdf.status_code != 200:
@@ -322,3 +353,7 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
     except Exception as e:
         print(f"[{NAME} ERROR] Gagal menyimpan file PDF: {e}")
         return None
+    finally:
+        # S-01: pastikan koneksi stream selalu ditutup
+        if r_pdf is not None:
+            r_pdf.close()

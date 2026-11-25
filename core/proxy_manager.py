@@ -16,6 +16,8 @@ Fitur:
 
 import os
 import re
+import threading
+
 from curl_cffi import requests as cffi_requests
 
 
@@ -48,7 +50,9 @@ class ProxyManager:
 
     _cached_proxy: str | None = None
     _last_check_time: float = 0.0
-    CACHE_DURATION: float = 300.0  # Simpan hasil proxy aktif selama 5 menit
+    CACHE_DURATION: float = 300.0        # TTL untuk hasil proxy yang valid
+    NULL_CACHE_DURATION: float = 25.0    # TTL untuk hasil None / semua proxy mati
+    _lock: threading.RLock = threading.RLock()
 
     def __init__(self, proxy_file: str | None = None):
         if proxy_file:
@@ -109,45 +113,59 @@ class ProxyManager:
 
     def mark_proxy_dead(self, proxy_url: str):
         """Tandai proxy yang sedang dipakai sebagai mati/terblokir agar langsung rotasi ke proxy berikutnya."""
-        if ProxyManager._cached_proxy == proxy_url:
-            ProxyManager._cached_proxy = None
-            ProxyManager._last_check_time = 0.0
+        with ProxyManager._lock:
+            if ProxyManager._cached_proxy == proxy_url:
+                ProxyManager._cached_proxy = None
+                ProxyManager._last_check_time = 0.0
 
     def get_working_proxy(self, target_url: str = "https://www.alldatasheet.com/view.jsp?Searchword=NE555", timeout: int = 8, force_refresh: bool = False) -> str | None:
         """
         Mencari proxy pertama yang aktif dari daftar.
         Jika tidak ada proxy yang aktif atau file kosong, mengembalikan None (fallback IP ori).
-        Hasil pencarian di-cache selama 5 menit agar tidak memboroskan kuota / rate-limit.
+        Hasil pencarian di-cache selama CACHE_DURATION (proxy valid) atau NULL_CACHE_DURATION (None).
         """
         import time
         now = time.time()
 
-        if not force_refresh and (now - ProxyManager._last_check_time < ProxyManager.CACHE_DURATION):
-            return ProxyManager._cached_proxy
+        # Baca cache dengan lock; pisahkan TTL untuk hasil valid vs None
+        if not force_refresh:
+            with ProxyManager._lock:
+                elapsed = now - ProxyManager._last_check_time
+                if ProxyManager._cached_proxy is not None:
+                    if elapsed < ProxyManager.CACHE_DURATION:
+                        return ProxyManager._cached_proxy
+                else:
+                    if elapsed < ProxyManager.NULL_CACHE_DURATION:
+                        return None
 
         # Muat ulang jika ada pembaruan pada file teks
         self._load_proxies()
 
+        found = None
+
         if not self.proxies:
-            ProxyManager._cached_proxy = None
-            ProxyManager._last_check_time = now
+            with ProxyManager._lock:
+                ProxyManager._cached_proxy = None
+                ProxyManager._last_check_time = time.time()
             return None
 
         print(f"[ProxyManager INFO] Menguji {len(self.proxies)} proxy pada '{self.proxy_file}'...")
         for idx, proxy in enumerate(self.proxies, 1):
             # Mask kredensial di log terminal
-            masked = re.sub(r"://([^:@]+):([^@]+)@", r"://\1:****@", proxy)
+            masked = re.sub(r"://([^:@]+):([^@]+)@", r"://\1:***@", proxy)
             print(f" -> [{idx}/{len(self.proxies)}] Menguji proxy: {masked} ...", end=" ", flush=True)
 
             if self.test_proxy(proxy, target_url=target_url, timeout=timeout):
                 print("🟢 AKTIF!")
-                ProxyManager._cached_proxy = proxy
-                ProxyManager._last_check_time = now
-                return proxy
+                found = proxy
+                break
             else:
                 print("🔴 MATI / GAGAL (Lanjut ke proxy berikutnya...)")
 
-        print("[ProxyManager WARNING] Seluruh proxy pada daftar tidak merespons. Fallback ke IP direct server.")
-        ProxyManager._cached_proxy = None
-        ProxyManager._last_check_time = now
-        return None
+        with ProxyManager._lock:
+            ProxyManager._cached_proxy = found
+            ProxyManager._last_check_time = time.time()
+
+        if found is None:
+            print("[ProxyManager WARNING] Seluruh proxy pada daftar tidak merespons. Fallback ke IP direct server.")
+        return found
