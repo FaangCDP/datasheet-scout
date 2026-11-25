@@ -6,9 +6,11 @@ Tanpa framework eksternal: murni pytest + unittest.mock, exit code 1 jika ada ya
 import os
 import sys
 import tempfile
+from pathlib import Path
 from unittest.mock import patch, MagicMock, PropertyMock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO = Path(__file__).resolve().parents[1]
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
@@ -232,10 +234,10 @@ def test_t02_proxy_manager_rlock():
 def test_s01_stream_close_finally():
     import sources.datasheet4u as ds4u, sources.alldatasheet as ads
 
-    ds4u_src = open("/home/paang/Documents/Learn_Py/sources/datasheet4u.py").read()
+    ds4u_src = open(str(REPO / "sources/datasheet4u.py")).read()
     assert "finally:" in ds4u_src, "datasheet4u missing finally:"
     assert ".close()" in ds4u_src, "datasheet4u missing .close()"
-    ads_src = open("/home/paang/Documents/Learn_Py/sources/alldatasheet.py").read()
+    ads_src = open(str(REPO / "sources/alldatasheet.py")).read()
     assert "finally:" in ads_src, "alldatasheet missing finally:"
     assert "r_pdf.close()" in ads_src, "alldatasheet missing r_pdf.close()"
 
@@ -386,7 +388,7 @@ def test_mock_403_no_unboundlocalerror():
     import sources.alldatasheet as ads
 
     # Test that tried_direct is defined before the retry loop handles 403
-    src = open("/home/paang/Documents/Learn_Py/sources/alldatasheet.py").read()
+    src = open(str(REPO / "sources/alldatasheet.py")).read()
     assert "tried_direct" in src, "tried_direct flag must exist in alldatasheet.py"
 
     # Verify the function can be called without UnboundLocalError by checking the source
@@ -411,19 +413,38 @@ def test_mock_429_503_backoff_proxy():
 
 
 def test_mock_specs_extractor_close():
-    """specs_extractor: memastikan .close() pada PdfDocument dan textpage tetap dipanggil meski terjadi exception."""
+    """specs_extractor: .close() pada PdfDocument, page, dan textpage tetap dipanggil meski exception saat baca teks."""
     from core import specs_extractor
     import tempfile, os
 
     with tempfile.TemporaryDirectory() as d:
-        # Create a dummy PDF
-        p = os.path.join(d, "test.pdf")
-        with open(p, "wb") as f:
+        pdf_path = os.path.join(d, "test.pdf")
+        with open(pdf_path, "wb") as f:
             f.write(b"%PDF-1.7 dummy")
 
-        # Mock PdfDocument.close to track calls
-        # (source-code structure verified separately; runtime mock depends on pypdfium2 availability)
-        pass
+        # Page → textpage yang melempar exception saat baca teks (skenario gagal baca)
+        fake_tp = MagicMock()
+        fake_tp.get_text_range.side_effect = RuntimeError("PDFium gagal baca teks")
+
+        fake_page = MagicMock()
+        fake_page.get_textpage.return_value = fake_tp
+
+        fake_pdf = MagicMock()
+        fake_pdf.__len__.return_value = 1
+        fake_pdf.__getitem__.return_value = fake_page
+
+        # Patch pypdfium2 agar tersedia + PdfDocument mengembalikan mock
+        with patch.object(specs_extractor, "HAS_PYPDFIUM", True), \
+             patch.object(specs_extractor, "pdfium") as mock_pdfium:
+            mock_pdfium.PdfDocument.return_value = fake_pdf
+            # pdftotext fallback: buang agar text tetap "" dan fokus ke pdfium path
+            with patch.object(specs_extractor, "PDFTOTEXT_BIN", None):
+                specs_extractor.extract_key_specs(pdf_path)
+
+        # Ketiga objek harus terpanggil .close() meski get_text_range melempar
+        assert fake_tp.close.called, "textpage.close() harus dipanggil saat exception baca teks"
+        assert fake_page.close.called, "page.close() harus dipanggil saat exception baca teks"
+        assert fake_pdf.close.called, "pdf.close() harus dipanggil di finally"
 
 
 def test_mock_scraper_session_forward():
@@ -455,36 +476,37 @@ def test_mock_scraper_session_forward():
 
 
 def test_mock_batch_stop_at_quota():
-    """batch_download.manual_batch_download: langsung berhenti saat MAX_TOTAL_MB tercapai tanpa memproses komponen berikutnya."""
-    from batch_download import manual_batch_download
-    import tempfile, os, batch_download
+    """batch_download.manual_batch_download: berhenti saat MAX_TOTAL_MB tercapai, search_component tidak dipanggil untuk komponen ke-2."""
+    import batch_download
 
-    # PATCH: MAX_TOTAL_MB to 1 untuk test cepat (tanpa menulis 7.5GB)
-    with patch("batch_download.MAX_TOTAL_MB", 1):
-        # Also mock folder_size_mb to immediately return >= 1 (quota exceeded)
-        original_folder_size = folder_size_mb
-        folder_size_mb_calls = []
+    with tempfile.TemporaryDirectory() as d:
+        # Kuota sudah penuh sejak awal (folder_size_mb=5 >= MAX_TOTAL_MB=1)
+        with patch.object(batch_download, "MAX_TOTAL_MB", 1), \
+             patch.object(batch_download, "folder_size_mb", return_value=5) as mock_size, \
+             patch.object(batch_download, "create_session") as mock_sess, \
+             patch.object(batch_download, "human_delay"), \
+             patch.object(batch_download, "search_component") as mock_search, \
+             patch.object(batch_download, "download_single") as mock_dl, \
+             patch.object(batch_download, "sanitize_filename", return_value="R1.pdf"), \
+             patch("builtins.print"):
+            mock_sess.return_value = MagicMock()
+            mock_search.return_value = [{"part_no": "R1", "manufacturer": "Yageo"}]
 
-        def mock_folder_size(path):
-            folder_size_mb_calls.append(path)
-            return 5  # emulate quota exceeded
+            batch_download.manual_batch_download(
+                ["resistor", "capacitor"], count_per_component=1, output_folder=d
+            )
 
-        with patch("batch_download.folder_size_mb", mock_folder_size):
-            # Should immediately stop without searching
-            output = manual_batch_download(["resistor"], count_per_component=1, output_folder="/tmp/test_quota")
+            # folder_size_mb terpanggil dan melebihi kuota
+            assert mock_size.called, "folder_size_mb harus dipanggil"
 
-            # Should return early; either None or partial results depending on early return design
-            # Main thing: verify folder_size_mb was called and it would have exceeded quota
-            assert len(folder_size_mb_calls) >= 1, "folder_size_mb should have been called once"
+            # search_component hanya untuk komponen PERTAMA; komponen ke-2 tak boleh disentuh
+            assert mock_search.call_count == 1, \
+                f"search_component dipanggil {mock_search.call_count}x, harus 1x (hanya resistor)"
+            called_name = mock_search.call_args[0][1]
+            assert called_name == "resistor", f"called with {called_name!r}, expected 'resistor'"
 
-            # Verify code path checks quota before searching more components
-            import inspect
-            src = inspect.getsource(batch_download.manual_batch_download)
-            assert "return" in src
-            assert "Kuota folder" in src
-            assert "seluruh batch dihentikan" in src
-        # The key: folder_size_mb >= MAX_TOTAL_MB should stop further processing
-        # This is verified by the existing t_quota test pattern
+            # Kuota penuh → return sebelum download_single jalan
+            assert not mock_dl.called, "download_single tidak boleh dipanggil saat kuota penuh"
 
 
 # ──────────────────────────────────────────────

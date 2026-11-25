@@ -130,6 +130,7 @@ def search_component(session: requests.Session, component_name: str, needed: int
                 if next_proxy:
                     session = requests.Session(impersonate="safari17_0")
                     session.proxies = {"http": next_proxy, "https": next_proxy}
+                    current_proxy = next_proxy
                     print(f"[{NAME} INFO] Berganti ke proxy baru: {next_proxy.split('@')[-1] if '@' in next_proxy else next_proxy}")
                 else:
                     # Seluruh proxy sudah habis atau mati, fallback ke direct IP (hanya sekali)
@@ -156,6 +157,7 @@ def search_component(session: requests.Session, component_name: str, needed: int
                 if next_proxy:
                     session = requests.Session(impersonate="safari17_0")
                     session.proxies = {"http": next_proxy, "https": next_proxy}
+                    current_proxy = next_proxy
                     print(f"[{NAME} INFO] Berganti ke proxy baru: {next_proxy.split('@')[-1] if '@' in next_proxy else next_proxy}")
                     time.sleep(1)
                     continue
@@ -174,6 +176,7 @@ def search_component(session: requests.Session, component_name: str, needed: int
             if next_proxy:
                 session = requests.Session(impersonate="safari17_0")
                 session.proxies = {"http": next_proxy, "https": next_proxy}
+                current_proxy = next_proxy
             else:
                 # Tidak ada proxy lagi, coba direct IP sekali saja
                 if not tried_direct:

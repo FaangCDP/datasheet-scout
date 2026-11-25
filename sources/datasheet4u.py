@@ -184,6 +184,7 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
         while resp.status_code in (301, 302, 303, 307, 308) and redirects < 5:
             location = resp.headers.get("Location")
             if not location:
+                resp.close()
                 break
             next_url = urllib.parse.urljoin(download_url, location)
             resp.close()
@@ -238,6 +239,7 @@ def download_single(session: requests.Session, result: dict, index: int = 1, dow
         while resp.status_code in (301, 302, 303, 307, 308) and redirects < 5:
             location = resp.headers.get("Location")
             if not location:
+                resp.close()
                 break
             next_url = urllib.parse.urljoin(pdf_url, location)
             resp.close()

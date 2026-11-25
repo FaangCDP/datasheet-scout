@@ -46,7 +46,7 @@ Ringkasan: **2 temuan TINGGI**, **3 temuan SEDANG**, **6 temuan RENDAH**. Tidak 
 
 | Item | Detail |
 |---|---|
-| Lokasi | `/home/paang/Documents/Learn_Py/.git.zip` (198 KB, 226 entry, permission `-rw-rw-r--`) |
+| Lokasi | `./.git.zip` (198 KB, 226 entry, permission `-rw-rw-r--`) |
 | Bukti | `.gitignore` memuat `.env`, `proxies.txt`, `checkpoint.md` — **tidak** memuat `.git.zip`. File untracked tapi siap ikut ter-commit (`git add .`) / terkirim ke hosting / ter-share. |
 | Dampak | Paket riwayat git memuat semua blob yang pernah di-commit, termasuk file yang sudah dihapus dari HEAD. Scan history saat ini bersih dari token, tapi satu commit berisi `.env` di masa depan = token bocor permanen lewat file ini. |
 | Fix minimum | Tambah `.git.zip` (dan `*.zip`) ke `.gitignore`, atau pindahkan keluar repo. |
